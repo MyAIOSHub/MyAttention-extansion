@@ -120,6 +120,11 @@ import {
   onRecommendTabDeactivated,
 } from './recommendation-controller';
 import { buildVolcengineAstHeaders } from '@/translation/volcengine-ast';
+import {
+  applyTranscribeSubtitle,
+  resetTranscript,
+  getTranscriptText,
+} from './transcribe-view';
 import { VOLCENGINE_AST_EVENTS } from '@/translation/volcengine-ast-protobuf';
 import { normalizeSimulcastPlaybackDelayMs } from '@/offscreen/simulcast-delay';
 import {
@@ -651,6 +656,10 @@ function handleSimulcastUpdate(
   if (SIMULCAST_SOURCE_SUBTITLE_EVENTS.has(event)) {
     appendSimulcastText('simulcast-original-text', text);
     appendSimulcastSpeakerLog(subtitle, 'source', text);
+    // 转写会话进行中：源字幕同时累积进转写视图
+    if (transcribeActive) {
+      applyTranscribeSubtitle(subtitle);
+    }
   }
 
   if (SIMULCAST_TRANSLATION_SUBTITLE_EVENTS.has(event)) {
@@ -843,6 +852,105 @@ async function handleSimulcastStopClick(): Promise<void> {
   }
 }
 
+// 转写会话是否进行中（决定是否把源字幕路由到转写视图）
+let transcribeActive = false;
+
+function readSavedSettings(): Promise<AppSettings> {
+  return new Promise((resolve) => {
+    chrome.storage.sync.get(['settings'], (result) => {
+      resolve((result.settings as AppSettings) || { ...DEFAULT_SETTINGS });
+    });
+  });
+}
+
+function setTranscribeStatus(text: string, kind: 'info' | 'success' | 'error'): void {
+  const el = document.getElementById('transcribe-status');
+  if (!el) return;
+  el.textContent = text;
+  el.classList.remove('hidden', 'text-gray-500', 'text-red-500', 'text-green-600');
+  el.classList.add(kind === 'error' ? 'text-red-500' : kind === 'success' ? 'text-green-600' : 'text-gray-500');
+}
+
+async function handleTranscribeStartClick(): Promise<void> {
+  try {
+    setTranscribeStatus('正在准备转写会话...', 'info');
+    const settings = await readSavedSettings();
+    const si = settings.simultaneousInterpretation ?? DEFAULT_SETTINGS.simultaneousInterpretation;
+    const credentials = si?.credentials;
+    if (!credentials) {
+      throw new Error('请先在「同声传译」页配置火山 AST 凭据');
+    }
+    // 校验凭据是否齐全（缺失会抛错）
+    buildVolcengineAstHeaders(credentials);
+
+    const [streamId, activeTab] = await Promise.all([
+      requestCurrentTabMediaStreamId(),
+      getActiveTab(),
+    ]);
+    if (typeof activeTab?.id !== 'number') {
+      throw new Error('未找到当前标签页');
+    }
+
+    resetTranscript();
+    const response = await safeSendRuntimeMessage<unknown, { simulcast?: { state?: string } }>({
+      type: 'simulcast:start',
+      tabId: activeTab.id,
+      streamId,
+      sourceLanguage: getControlValue('transcribe-source-language', 'auto'),
+      targetLanguage: 'auto',
+      model: si?.model ?? DEFAULT_SETTINGS.simultaneousInterpretation?.model ?? '',
+      audioOutputMode: 'subtitlesOnly', // 强制 s2t：仅源字幕，无翻译/TTS
+      originalVolume: 0,
+      translatedVolume: 0,
+      translatedAudioDelayMs: 0,
+      subtitleDisplayMode: 'originalOnly',
+      voiceCloneEnabled: false,
+      credentials,
+    });
+
+    if (response.status === 'error') {
+      throw new Error(response.error || '启动转写失败');
+    }
+
+    transcribeActive = true;
+    setTranscribeStatus('转写进行中：正在捕获标签页音频…', 'success');
+    const meta = document.getElementById('transcribe-meta');
+    if (meta) meta.textContent = '录制中…';
+  } catch (error) {
+    transcribeActive = false;
+    setTranscribeStatus(getErrorMessage(error), 'error');
+  }
+}
+
+async function handleTranscribeStopClick(): Promise<void> {
+  try {
+    setTranscribeStatus('正在停止转写...', 'info');
+    const response = await safeSendRuntimeMessage({ type: 'simulcast:stop' });
+    if (response.status === 'error') {
+      throw new Error(response.error || '停止转写失败');
+    }
+    setTranscribeStatus('已停止转写', 'success');
+  } catch (error) {
+    setTranscribeStatus(getErrorMessage(error), 'error');
+  } finally {
+    transcribeActive = false;
+  }
+}
+
+async function handleTranscribeCopyClick(): Promise<void> {
+  const text = getTranscriptText();
+  if (!text) {
+    setTranscribeStatus('暂无可复制的转写内容', 'info');
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(text);
+    setTranscribeStatus('已复制全文', 'success');
+  } catch {
+    setTranscribeStatus('复制失败，请手动选择文本', 'error');
+  }
+}
+
 function persistTranslationQuality(quality: 'fast' | 'accurate'): void {
   chrome.storage.sync.get(['settings'], (result) => {
     const settings = (result.settings || { ...DEFAULT_SETTINGS }) as AppSettings;
@@ -890,6 +998,16 @@ function initializeTranslationActions(): void {
 
   document.getElementById('simulcast-stop-btn')?.addEventListener('click', () => {
     void handleSimulcastStopClick();
+  });
+
+  document.getElementById('transcribe-start-btn')?.addEventListener('click', () => {
+    void handleTranscribeStartClick();
+  });
+  document.getElementById('transcribe-stop-btn')?.addEventListener('click', () => {
+    void handleTranscribeStopClick();
+  });
+  document.getElementById('transcribe-copy-btn')?.addEventListener('click', () => {
+    void handleTranscribeCopyClick();
   });
 }
 
@@ -1162,6 +1280,7 @@ function initializeMemoriesList() {
   const tabRecommend = document.getElementById('tab-recommend');
   const tabImmersiveTranslation = document.getElementById('tab-immersive-translation');
   const tabSimultaneousInterpretation = document.getElementById('tab-simultaneous-interpretation');
+  const tabTranscribe = document.getElementById('tab-transcribe');
   const tabSettings = document.getElementById('tab-settings');
 
   if (tabAttention) {
@@ -1178,6 +1297,9 @@ function initializeMemoriesList() {
   }
   if (tabSimultaneousInterpretation) {
     tabSimultaneousInterpretation.addEventListener('click', () => switchTab('simultaneous-interpretation'));
+  }
+  if (tabTranscribe) {
+    tabTranscribe.addEventListener('click', () => switchTab('transcribe'));
   }
   if (tabSettings) {
     tabSettings.addEventListener('click', () => switchTab('settings'));
@@ -2325,6 +2447,7 @@ type PopupTabName =
   | 'recommend'
   | 'immersive-translation'
   | 'simultaneous-interpretation'
+  | 'transcribe'
   | 'settings';
 
 function switchTab(tabName: PopupTabName): void {
