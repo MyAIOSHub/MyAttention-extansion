@@ -73,6 +73,60 @@ describe('translation service', () => {
     ]);
   });
 
+  it('defaults bailian page translation to the fast model (qwen-turbo) with thinking disabled', async () => {
+    const runCompletion = vi
+      .fn()
+      .mockResolvedValue(JSON.stringify({ translations: [{ id: 'sayso-t1', text: '你好' }] }));
+
+    await translatePageTextItems({
+      settings: { llmApi: { provider: 'bailian', apiKey: 'k', model: 'qwen-plus' } },
+      request: { sourceLanguage: 'auto', targetLanguage: 'zh-CN', items },
+      runCompletion,
+    });
+
+    expect(runCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: 'bailian', model: 'qwen-turbo' }),
+      expect.objectContaining({ enableThinking: false })
+    );
+  });
+
+  it('uses the accurate model (deepseek-v4-flash) when quality is set to accurate', async () => {
+    const runCompletion = vi
+      .fn()
+      .mockResolvedValue(JSON.stringify({ translations: [{ id: 'sayso-t1', text: '你好' }] }));
+
+    await translatePageTextItems({
+      settings: {
+        llmApi: { provider: 'bailian', apiKey: 'k', model: 'qwen-plus' },
+        immersiveTranslation: { translationQuality: 'accurate' } as never,
+      },
+      request: { sourceLanguage: 'auto', targetLanguage: 'zh-CN', items },
+      runCompletion,
+    });
+
+    expect(runCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: 'bailian', model: 'deepseek-v4-flash' }),
+      expect.objectContaining({ enableThinking: false })
+    );
+  });
+
+  it('keeps the configured model for non-bailian providers but still disables thinking', async () => {
+    const runCompletion = vi
+      .fn()
+      .mockResolvedValue(JSON.stringify({ translations: [{ id: 'sayso-t1', text: 'x' }] }));
+
+    await translatePageTextItems({
+      settings: { llmApi: { provider: 'openai', apiKey: 'k', model: 'gpt-4o-mini' } },
+      request: { sourceLanguage: 'auto', targetLanguage: 'zh-CN', items },
+      runCompletion,
+    });
+
+    expect(runCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({ model: 'gpt-4o-mini' }),
+      expect.objectContaining({ enableThinking: false })
+    );
+  });
+
   it('requires an LLM API key for server-side page translation', async () => {
     await expect(
       translatePageTextItems({

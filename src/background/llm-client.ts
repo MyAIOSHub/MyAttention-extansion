@@ -20,6 +20,8 @@ export interface LlmCompletionOptions {
   messages: LlmMessage[];
   temperature?: number;
   maxTokens?: number;
+  /** 关闭混合推理模型（qwen3 / deepseek-v3.1+）的思考链，避免翻译等任务被拖慢。 */
+  enableThinking?: boolean;
 }
 
 function getBaseUrl(config: NonNullable<AppSettings['llmApi']>): string {
@@ -50,6 +52,7 @@ export async function callLlm(
       messages: options.messages,
       temperature: options.temperature ?? 0.7,
       max_tokens: options.maxTokens ?? 4096,
+      ...(options.enableThinking === false ? { enable_thinking: false } : {}),
     }),
   });
 

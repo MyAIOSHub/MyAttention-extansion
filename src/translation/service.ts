@@ -52,6 +52,30 @@ function normalizeLanguageLabel(language: string): string {
   return language;
 }
 
+// 翻译质量取向 → bailian 模型映射（均关闭思考链）。
+// 快=qwen-turbo（实测最快），准=deepseek-v4-flash（更准、慢约 30-50%）。
+// 其他 provider 无这些模型，沿用用户配置。
+type TranslationQuality = 'fast' | 'accurate';
+
+const BAILIAN_TRANSLATION_MODEL: Record<TranslationQuality, string> = {
+  fast: 'qwen-turbo',
+  accurate: 'deepseek-v4-flash',
+};
+
+function resolveTranslationLlmConfig(
+  config: NonNullable<AppSettings['llmApi']>,
+  quality: TranslationQuality
+): NonNullable<AppSettings['llmApi']> {
+  if (config.provider === 'bailian') {
+    return { ...config, model: BAILIAN_TRANSLATION_MODEL[quality] };
+  }
+  return config;
+}
+
+function getTranslationQuality(settings: Partial<AppSettings>): TranslationQuality {
+  return settings.immersiveTranslation?.translationQuality === 'accurate' ? 'accurate' : 'fast';
+}
+
 export function buildPageTranslationMessages(
   request: PageTranslationRequest
 ): LlmMessage[] {
@@ -164,10 +188,11 @@ export async function translatePageTextItems({
     throw new Error('请先在设置中配置 LLM API Key');
   }
 
-  const raw = await runCompletion(llmConfig, {
+  const raw = await runCompletion(resolveTranslationLlmConfig(llmConfig, getTranslationQuality(settings)), {
     messages: buildPageTranslationMessages(request),
     temperature: 0.2,
     maxTokens: Math.min(8192, Math.max(1024, request.items.length * 256)),
+    enableThinking: false,
   });
 
   return {
@@ -191,10 +216,11 @@ export async function explainSelectedText({
     throw new Error('请先在设置中配置 LLM API Key');
   }
 
-  const explanation = await runCompletion(llmConfig, {
+  const explanation = await runCompletion(resolveTranslationLlmConfig(llmConfig, getTranslationQuality(settings)), {
     messages: buildSelectedTextExplanationMessages(normalizedText, targetLanguage),
     temperature: 0.2,
     maxTokens: 1024,
+    enableThinking: false,
   });
 
   return {

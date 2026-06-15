@@ -842,6 +842,34 @@ async function handleSimulcastStopClick(): Promise<void> {
   }
 }
 
+function persistTranslationQuality(quality: 'fast' | 'accurate'): void {
+  chrome.storage.sync.get(['settings'], (result) => {
+    const settings = (result.settings || { ...DEFAULT_SETTINGS }) as AppSettings;
+    const base = settings.immersiveTranslation ?? DEFAULT_SETTINGS.immersiveTranslation;
+    settings.immersiveTranslation = base
+      ? { ...base, translationQuality: quality }
+      : ({ translationQuality: quality } as AppSettings['immersiveTranslation']);
+    chrome.storage.sync.set({ settings });
+  });
+}
+
+function initializeTranslationQualityControl(): void {
+  const select = document.getElementById('immersive-quality') as HTMLSelectElement | null;
+  if (!select) {
+    return;
+  }
+
+  void (async () => {
+    const settings = await getStoredSettings();
+    select.value =
+      settings?.immersiveTranslation?.translationQuality === 'accurate' ? 'accurate' : 'fast';
+  })();
+
+  select.addEventListener('change', () => {
+    persistTranslationQuality(select.value === 'accurate' ? 'accurate' : 'fast');
+  });
+}
+
 function initializeTranslationActions(): void {
   document
     .getElementById('immersive-translate-current-page')
@@ -852,6 +880,8 @@ function initializeTranslationActions(): void {
   document.getElementById('immersive-clear-page')?.addEventListener('click', () => {
     void handleClearPageTranslationsClick();
   });
+
+  initializeTranslationQualityControl();
 
   document.getElementById('simulcast-start-btn')?.addEventListener('click', () => {
     void handleSimulcastStartClick();

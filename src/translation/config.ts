@@ -37,6 +37,8 @@ export type TranslationProvider = 'browser' | 'openaiCompatible' | 'volcengine';
 export type TranslationRange = 'main' | 'selection' | 'fullPage' | 'all';
 export type SubtitleDisplayMode = 'bilingual' | 'originalOnly' | 'translationOnly' | 'off';
 export type AudioOutputMode = 'translatedOnly' | 'dualTrack' | 'mixed' | 'subtitlesOnly';
+/** 翻译质量取向：fast=更快(qwen-turbo)，accurate=更准(deepseek-v4-flash)。均关闭思考链。 */
+export type TranslationQuality = 'fast' | 'accurate';
 
 const DEFAULT_VOLCENGINE_AST_MODEL_ID = 'Doubao_scene_SLM_Doubao_SI_model2000000748711437826';
 
@@ -47,6 +49,7 @@ export interface ImmersiveTranslationConfig {
   provider: TranslationProvider;
   mode: TranslationMode;
   range: TranslationRange;
+  translationQuality: TranslationQuality;
   contextAware: boolean;
   floatingButtonEnabled: boolean;
   selectionToolbarEnabled: boolean;
@@ -88,6 +91,7 @@ export function createDefaultImmersiveTranslationConfig(): ImmersiveTranslationC
     provider: 'browser',
     mode: 'bilingual',
     range: 'main',
+    translationQuality: 'fast',
     contextAware: true,
     floatingButtonEnabled: true,
     selectionToolbarEnabled: true,
