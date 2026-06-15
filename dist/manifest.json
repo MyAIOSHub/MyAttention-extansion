@@ -1,5 +1,6 @@
 {
   "action": {
+    "default_popup": "html/popup.html",
     "default_icon": {
       "128": "icons/logo_128.png",
       "16": "icons/logo_16.png",
@@ -14,12 +15,29 @@
     {
       "css": ["css/content.css"],
       "js": ["content-script.js"],
-      "matches": ["http://*/*", "https://*/*"]
+      "matches": ["http://*/*", "https://*/*"],
+      "all_frames": true,
+      "match_about_blank": true
     }
   ],
+  "commands": {
+    "_execute_action": {
+      "description": "Open My Attention",
+      "suggested_key": {
+        "default": "Ctrl+Shift+Y",
+        "mac": "Command+Shift+Y"
+      }
+    }
+  },
   "default_locale": "en",
   "description": "__MSG_extensionDescription__",
-  "host_permissions": ["http://127.0.0.1:1995/*", "http://127.0.0.1:1996/*"],
+  "host_permissions": [
+    "*://*/*",
+    "wss://openspeech.bytedance.com/*",
+    "http://127.0.0.1:1995/*",
+    "http://127.0.0.1:1996/*",
+    "https://api.exa.ai/*"
+  ],
   "icons": {
     "128": "icons/logo_128.png",
     "16": "icons/logo_16.png",
@@ -27,8 +45,12 @@
   },
   "manifest_version": 3,
   "name": "__MSG_extensionName__",
-  "permissions": ["storage", "tabs", "downloads", "contextMenus", "scripting", "alarms", "history", "notifications"],
-  "version": "1.2.0",
+  "options_ui": {
+    "open_in_tab": true,
+    "page": "html/options.html"
+  },
+  "permissions": ["storage", "tabs", "activeTab", "downloads", "contextMenus", "scripting", "alarms", "history", "notifications", "cookies", "identity", "webNavigation", "offscreen", "sidePanel", "tabCapture", "declarativeNetRequestWithHostAccess"],
+  "version": "1.5.0",
   "web_accessible_resources": [
     {
       "matches": [

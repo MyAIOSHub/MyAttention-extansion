@@ -40,6 +40,16 @@ import {
   type BrowserSyncStatus,
 } from './evermemos-client';
 import { notifyConversationUpdated } from './myisland-client';
+import {
+  explainSelectedText,
+  translatePageTextItems,
+  type PageTranslationRequest,
+  type PageTranslationResult,
+} from '@/translation/service';
+import {
+  loadLocalCredentialPrefill,
+  resolveLlmCredentialPrefill,
+} from '@/popup/local-credential-prefill';
 
 function toErrorMessage(error: unknown): string {
   if (error instanceof Error) {
@@ -193,6 +203,62 @@ export class MessageHandlers {
           resolve(this.mergeSettings(APP_DEFAULT_SETTINGS, result.settings || {}));
         }
       });
+    });
+  }
+
+  /**
+   * 当用户尚未手动保存 LLM API Key 时，回退到 local-prefill.json 中预设的凭据，
+   * 让沉浸式翻译等功能开箱即用。已保存的 Key 始终优先。
+   */
+  private async resolveLlmSettings(settings: AppSettings): Promise<AppSettings> {
+    if (settings.llmApi?.apiKey) {
+      return settings;
+    }
+
+    const prefill = await loadLocalCredentialPrefill();
+    if (!prefill.llmApi?.apiKey) {
+      return settings;
+    }
+
+    return {
+      ...settings,
+      llmApi: resolveLlmCredentialPrefill(settings.llmApi, prefill.llmApi),
+    };
+  }
+
+  async handleTranslatePageText(
+    request: PageTranslationRequest
+  ): Promise<PageTranslationResult> {
+    Logger.info('[MessageHandlers] 翻译网页文本:', {
+      count: request.items.length,
+      targetLanguage: request.targetLanguage,
+    });
+
+    const settings = await this.resolveLlmSettings(
+      (await this.handleGetSettings()) as AppSettings
+    );
+    return translatePageTextItems({
+      settings,
+      request,
+    });
+  }
+
+  async handleExplainText(request: {
+    text: string;
+    targetLanguage: string;
+  }): Promise<{ explanation: string }> {
+    Logger.info('[MessageHandlers] 解释选中文本:', {
+      length: request.text.length,
+      targetLanguage: request.targetLanguage,
+    });
+
+    const settings = await this.resolveLlmSettings(
+      (await this.handleGetSettings()) as AppSettings
+    );
+    return explainSelectedText({
+      settings,
+      text: request.text,
+      targetLanguage: request.targetLanguage || 'zh-CN',
     });
   }
 
@@ -675,6 +741,21 @@ export class MessageHandlers {
         ...((current || {}).webCapture || {}),
         ...((partial || {}).webCapture || {}),
       } as NonNullable<AppSettings['webCapture']>,
+      immersiveTranslation: {
+        ...(APP_DEFAULT_SETTINGS.immersiveTranslation || {}),
+        ...((current || {}).immersiveTranslation || {}),
+        ...((partial || {}).immersiveTranslation || {}),
+      } as NonNullable<AppSettings['immersiveTranslation']>,
+      simultaneousInterpretation: {
+        ...(APP_DEFAULT_SETTINGS.simultaneousInterpretation || {}),
+        ...((current || {}).simultaneousInterpretation || {}),
+        ...((partial || {}).simultaneousInterpretation || {}),
+        credentials: {
+          ...(APP_DEFAULT_SETTINGS.simultaneousInterpretation?.credentials || {}),
+          ...((current || {}).simultaneousInterpretation?.credentials || {}),
+          ...((partial || {}).simultaneousInterpretation?.credentials || {}),
+        },
+      } as NonNullable<AppSettings['simultaneousInterpretation']>,
     };
   }
 

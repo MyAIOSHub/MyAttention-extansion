@@ -6,6 +6,14 @@ import type { Message, MessageChanges, MessageSender } from './message';
 import type { Conversation, PlatformName, ConversationStats } from './conversation';
 import type { PlatformConfig, UrlMatchResult } from './platform';
 import type { SnippetStatus } from './snippet';
+import type {
+  ImmersiveTranslationConfig,
+  SimultaneousInterpretationConfig,
+} from '@/translation/config';
+import {
+  createDefaultImmersiveTranslationConfig,
+  createDefaultSimultaneousInterpretationConfig,
+} from '@/translation/config';
 
 // ============================================================================
 // Chrome Extension 相关类型
@@ -38,6 +46,19 @@ export type KnownChromeMessageType =
   | 'settingsUpdated'
   | 'content:healthPing'
   | 'content:healthPong'
+  | 'translation:translateCurrentPage'
+  | 'translation:translatePageText'
+  | 'translation:explainText'
+  | 'translation:translateTabFrames'
+  | 'translation:clearPageTranslations'
+  | 'translation:clearTabTranslations'
+  | 'simulcast:start'
+  | 'simulcast:stop'
+  | 'simulcast:getStatus'
+  | 'simulcast:update'
+  | 'simulcast:popupUpdate'
+  | 'simulcast:offscreenStart'
+  | 'simulcast:offscreenStop'
   | 'reportContentRuntime'
   | 'getTabRuntimeStatus'
   | 'getLocalStoreStatus'
@@ -167,6 +188,14 @@ export interface TabRuntimeStatus {
 export interface AppSettings {
   /** 是否启用自动保存 */
   autoSave: boolean;
+  /** Options / 外观体验设置 */
+  experience?: {
+    theme: 'system' | 'light' | 'dark';
+    language: 'system' | 'zh-CN' | 'en';
+    betaExperienceEnabled: boolean;
+    commandPaletteEnabled: boolean;
+    settingsSearchEnabled: boolean;
+  };
   /** 悬浮标签设置 */
   floatTag?: {
     x?: number;
@@ -207,6 +236,10 @@ export interface AppSettings {
     mediaEnabled: boolean;
     mediaLocalCopyEnabled: boolean;
   };
+  /** 沉浸式网页翻译设置 */
+  immersiveTranslation?: ImmersiveTranslationConfig;
+  /** 网页视频同声传译设置 */
+  simultaneousInterpretation?: SimultaneousInterpretationConfig;
 }
 
 /**
@@ -214,6 +247,13 @@ export interface AppSettings {
  */
 export const DEFAULT_SETTINGS: AppSettings = {
   autoSave: true,
+  experience: {
+    theme: 'system',
+    language: 'system',
+    betaExperienceEnabled: false,
+    commandPaletteEnabled: true,
+    settingsSearchEnabled: true,
+  },
   floatTag: {
     x: undefined,
     y: undefined,
@@ -239,6 +279,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
     mediaEnabled: true,
     mediaLocalCopyEnabled: true,
   },
+  immersiveTranslation: createDefaultImmersiveTranslationConfig(),
+  simultaneousInterpretation: createDefaultSimultaneousInterpretationConfig(),
 };
 
 export type LocalStoreMigrationState = 'pending' | 'running' | 'done' | 'failed';

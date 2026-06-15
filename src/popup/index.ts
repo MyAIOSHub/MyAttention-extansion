@@ -7,6 +7,7 @@ import type {
   AppSettings,
   StorageUsage,
   Conversation,
+  ChromeMessageRequest,
   ChromeMessageResponse,
   TabRuntimeStatus,
   Snippet,
@@ -117,6 +118,21 @@ import {
   onRecommendTabActivated,
   onRecommendTabDeactivated,
 } from './recommendation-controller';
+import { buildVolcengineAstHeaders } from '@/translation/volcengine-ast';
+import { VOLCENGINE_AST_EVENTS } from '@/translation/volcengine-ast-protobuf';
+import { normalizeSimulcastPlaybackDelayMs } from '@/offscreen/simulcast-delay';
+import {
+  loadLocalCredentialPrefill,
+  resolveLlmCredentialPrefill,
+  resolveSimulcastCredentialPrefill,
+} from './local-credential-prefill';
+import { formatPageTranslationStatus } from './translation-status';
+import {
+  formatSimulcastTimestamp,
+  reduceSimulcastSpeakerSegments,
+  type SimulcastSpeakerSegment,
+  type SimulcastSubtitleChannel,
+} from './simulcast-speaker-log';
 
 // ============================================================================
 // 类型定义
@@ -166,6 +182,7 @@ let recoveryToastShown = false;
 let refreshQueue: PopupRefreshQueue | null = null;
 let popupContextInvalidated = false;
 let attentionLoadingCount = 0;
+let simulcastSpeakerSegments: SimulcastSpeakerSegment[] = [];
 
 const SILENT_MESSAGE_TYPES = new Set(['reportContentRuntime']);
 const popupMessageRouter = createPopupMessageRouter({
@@ -207,6 +224,40 @@ const FILTER_PLATFORMS: Array<{ id: Conversation['platform']; label: string }> =
   { id: 'doubao', label: '豆包' },
   { id: 'yuanbao', label: '腾讯元宝' },
 ];
+
+const SIMULCAST_SOURCE_SUBTITLE_EVENTS = new Set<number>([
+  VOLCENGINE_AST_EVENTS.SourceSubtitleStart,
+  VOLCENGINE_AST_EVENTS.SourceSubtitleResponse,
+  VOLCENGINE_AST_EVENTS.SourceSubtitleEnd,
+]);
+
+const SIMULCAST_TRANSLATION_SUBTITLE_EVENTS = new Set<number>([
+  VOLCENGINE_AST_EVENTS.TranslationSubtitleStart,
+  VOLCENGINE_AST_EVENTS.TranslationSubtitleResponse,
+  VOLCENGINE_AST_EVENTS.TranslationSubtitleEnd,
+]);
+
+const SIMULCAST_SUBTITLE_START_EVENTS = new Set<number>([
+  VOLCENGINE_AST_EVENTS.SourceSubtitleStart,
+  VOLCENGINE_AST_EVENTS.TranslationSubtitleStart,
+]);
+
+interface SimulcastUpdateMessage {
+  target?: string;
+  status?: {
+    kind?: 'success' | 'error' | 'info';
+    message?: string;
+  };
+  subtitle?: {
+    event?: number;
+    text?: string;
+    startTime?: number;
+    endTime?: number;
+    spkChg?: boolean;
+    mutedDurationMs?: number;
+    speakerId?: string;
+  };
+}
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -404,6 +455,413 @@ async function pingContentScript(
   });
 }
 
+function getControlValue(id: string, fallback: string): string {
+  const element = document.getElementById(id) as HTMLInputElement | HTMLSelectElement | null;
+  const value = element?.value;
+  return value && value.length > 0 ? value : fallback;
+}
+
+function getNumberControlValue(id: string, fallback: number): number {
+  const numberValue = Number(getControlValue(id, String(fallback)));
+  if (!Number.isFinite(numberValue)) {
+    return fallback;
+  }
+  return Math.min(1, Math.max(0, numberValue));
+}
+
+function getDelayControlValue(id: string): number {
+  return normalizeSimulcastPlaybackDelayMs(getControlValue(id, '0'));
+}
+
+function setControlValue(id: string, value: string | number | undefined): void {
+  const element = document.getElementById(id) as HTMLInputElement | HTMLSelectElement | null;
+  if (!element || value === undefined) {
+    return;
+  }
+  element.value = String(value);
+}
+
+function getStoredSettings(): Promise<AppSettings | undefined> {
+  return new Promise((resolve) => {
+    chrome.storage.sync.get(['settings'], (result) => {
+      resolve(result.settings as AppSettings | undefined);
+    });
+  });
+}
+
+function normalizePopupTranslationMode(value: string): 'bilingual' | 'translationOnly' {
+  return value === 'translationOnly' ? 'translationOnly' : 'bilingual';
+}
+
+function requestCurrentTabMediaStreamId(): Promise<string> {
+  return new Promise((resolve, reject) => {
+    if (!chrome.tabCapture?.getMediaStreamId) {
+      reject(new Error('当前浏览器不支持 tabCapture 音频捕获'));
+      return;
+    }
+
+    chrome.tabCapture.getMediaStreamId({}, (streamId) => {
+      const errorMessage = chrome.runtime.lastError?.message;
+      if (errorMessage) {
+        reject(new Error(errorMessage));
+        return;
+      }
+      if (!streamId) {
+        reject(new Error('无法获取当前标签页音频流'));
+        return;
+      }
+      resolve(streamId);
+    });
+  });
+}
+
+function setTranslationStatus(
+  elementId: string,
+  message: string,
+  kind: 'info' | 'success' | 'error' = 'info'
+): void {
+  const element = document.getElementById(elementId);
+  if (!element) {
+    return;
+  }
+
+  const kindClassNames = {
+    info: 'text-gray-600 bg-gray-50 border-gray-100',
+    success: 'text-green-700 bg-green-50 border-green-100',
+    error: 'text-red-700 bg-red-50 border-red-100',
+  } as const;
+
+  element.textContent = message;
+  element.className = `text-xs rounded-lg px-3 py-2 border ${kindClassNames[kind]}`;
+  element.classList.remove('hidden');
+}
+
+function appendSimulcastText(elementId: string, text: string): void {
+  const element = document.getElementById(elementId);
+  const normalizedText = text.trim();
+  if (!element || !normalizedText) {
+    return;
+  }
+
+  const currentText = element.textContent?.trim();
+  element.textContent = currentText ? `${currentText} ${normalizedText}` : normalizedText;
+}
+
+function getSimulcastChannelLabel(channel: SimulcastSubtitleChannel): string {
+  return channel === 'source' ? '原文' : '译文';
+}
+
+function renderSimulcastSpeakerLog(): void {
+  const container = document.getElementById('simulcast-speaker-log');
+  if (!container) {
+    return;
+  }
+
+  if (!simulcastSpeakerSegments.length) {
+    container.innerHTML = '<div class="text-gray-400">等待流式说话人日志...</div>';
+    return;
+  }
+
+  container.innerHTML = simulcastSpeakerSegments
+    .slice(-80)
+    .map((segment) => {
+      const channelClass =
+        segment.channel === 'source'
+          ? 'bg-blue-50 text-blue-700 border-blue-100'
+          : 'bg-green-50 text-green-700 border-green-100';
+      return `
+        <div class="border border-gray-100 rounded-lg p-2 bg-white">
+          <div class="flex items-center justify-between gap-2 mb-1">
+            <div class="flex items-center gap-2 min-w-0">
+              <span class="text-xs font-medium text-gray-700">${escapeHtml(segment.speakerLabel)}</span>
+              <span class="text-xs px-1 py-0.5 rounded border ${channelClass}">${getSimulcastChannelLabel(segment.channel)}</span>
+            </div>
+            <span class="text-xs text-gray-400 flex-shrink-0">${formatSimulcastTimestamp(segment.startTime)}-${formatSimulcastTimestamp(segment.endTime)}</span>
+          </div>
+          <div class="text-xs text-gray-700 leading-relaxed whitespace-pre-wrap">${escapeHtml(segment.text)}</div>
+        </div>
+      `;
+    })
+    .join('');
+}
+
+function appendSimulcastSpeakerLog(
+  subtitle: NonNullable<SimulcastUpdateMessage['subtitle']>,
+  channel: SimulcastSubtitleChannel,
+  text: string
+): void {
+  simulcastSpeakerSegments = reduceSimulcastSpeakerSegments(simulcastSpeakerSegments, {
+    channel,
+    text,
+    speakerId: subtitle.speakerId,
+    startTime: subtitle.startTime,
+    endTime: subtitle.endTime,
+    spkChg: subtitle.spkChg || SIMULCAST_SUBTITLE_START_EVENTS.has(subtitle.event ?? 0),
+    replaceText: !SIMULCAST_SUBTITLE_START_EVENTS.has(subtitle.event ?? 0),
+  });
+  if (simulcastSpeakerSegments.length > 120) {
+    simulcastSpeakerSegments = simulcastSpeakerSegments.slice(-80);
+  }
+  renderSimulcastSpeakerLog();
+}
+
+function clearSimulcastStreamingOutput(): void {
+  ['simulcast-original-text', 'simulcast-translated-text'].forEach((id) => {
+    const element = document.getElementById(id);
+    if (element) {
+      element.textContent = '';
+    }
+  });
+  simulcastSpeakerSegments = [];
+  renderSimulcastSpeakerLog();
+}
+
+function handleSimulcastUpdate(
+  message: SimulcastUpdateMessage,
+  sendResponse: (response: { status: 'ok' }) => void
+): void {
+  if (message?.target === 'background') {
+    sendResponse({ status: 'ok' });
+    return;
+  }
+
+  const subtitle = message?.subtitle;
+  const text = typeof subtitle?.text === 'string' ? subtitle.text.trim() : '';
+  const statusMessage = message?.status?.message?.trim();
+  if (statusMessage) {
+    setTranslationStatus(
+      'simulcast-status',
+      statusMessage,
+      message.status?.kind === 'error' ? 'error' : message.status?.kind === 'info' ? 'info' : 'success'
+    );
+  }
+
+  if (!subtitle || !text) {
+    sendResponse({ status: 'ok' });
+    return;
+  }
+
+  const event = subtitle.event;
+  if (typeof event !== 'number') {
+    sendResponse({ status: 'ok' });
+    return;
+  }
+
+  if (SIMULCAST_SOURCE_SUBTITLE_EVENTS.has(event)) {
+    appendSimulcastText('simulcast-original-text', text);
+    appendSimulcastSpeakerLog(subtitle, 'source', text);
+  }
+
+  if (SIMULCAST_TRANSLATION_SUBTITLE_EVENTS.has(event)) {
+    appendSimulcastText('simulcast-translated-text', text);
+    appendSimulcastSpeakerLog(subtitle, 'translation', text);
+  }
+
+  if (!statusMessage) {
+    setTranslationStatus('simulcast-status', '同声传译运行中：正在接收字幕和译音。', 'success');
+  }
+  sendResponse({ status: 'ok' });
+}
+
+async function sendMessageToActiveTab<R = any>(
+  message: ChromeMessageRequest
+): Promise<ChromeMessageResponse<R>> {
+  const activeTab = await getActiveTab();
+  if (typeof activeTab?.id !== 'number') {
+    throw new Error('未找到当前标签页');
+  }
+
+  return new Promise((resolve, reject) => {
+    chrome.tabs.sendMessage(activeTab.id!, message, (response) => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message || '当前页面未响应扩展消息'));
+        return;
+      }
+
+      resolve((response || {}) as ChromeMessageResponse<R>);
+    });
+  });
+}
+
+async function handleTranslateCurrentPageClick(): Promise<void> {
+  try {
+    const provider = getControlValue('immersive-provider', 'openaiCompatible');
+    if (provider !== 'openaiCompatible') {
+      setTranslationStatus('immersive-status', '当前版本先使用 LLM API 通道翻译网页文本。', 'info');
+    } else {
+      setTranslationStatus('immersive-status', '正在抽取网页文本并翻译...', 'info');
+    }
+
+    const activeTab = await getActiveTab();
+    if (typeof activeTab?.id !== 'number') {
+      throw new Error('未找到当前标签页');
+    }
+
+    const response = await safeSendRuntimeMessage<
+      unknown,
+      { translatedCount?: number; frameCount?: number; failedFrameCount?: number; errorMessage?: string }
+    >({
+      type: 'translation:translateTabFrames',
+      tabId: activeTab.id,
+      sourceLanguage: getControlValue('immersive-source-language', 'auto'),
+      targetLanguage: getControlValue('immersive-target-language', 'zh-CN'),
+      mode: normalizePopupTranslationMode(getControlValue('immersive-mode', 'bilingual')),
+      range: getControlValue('immersive-range', 'main'),
+    });
+
+    if (response.status === 'error') {
+      throw new Error(response.error || '翻译失败');
+    }
+
+    const translatedCount = response.translatedCount ?? response.data?.translatedCount ?? 0;
+    const frameCount = response.frameCount ?? response.data?.frameCount ?? 1;
+    const failedFrameCount = response.failedFrameCount ?? response.data?.failedFrameCount ?? 0;
+    const errorMessage = response.errorMessage ?? response.data?.errorMessage;
+    const translationStatus = formatPageTranslationStatus({
+      translatedCount,
+      frameCount,
+      failedFrameCount,
+      errorMessage,
+    });
+    setTranslationStatus(
+      'immersive-status',
+      translationStatus.message,
+      translationStatus.kind
+    );
+  } catch (error) {
+    setTranslationStatus('immersive-status', getErrorMessage(error) || '翻译失败', 'error');
+  }
+}
+
+async function handleClearPageTranslationsClick(): Promise<void> {
+  try {
+    const activeTab = await getActiveTab();
+    if (typeof activeTab?.id !== 'number') {
+      throw new Error('未找到当前标签页');
+    }
+
+    await safeSendRuntimeMessage({
+      type: 'translation:clearTabTranslations',
+      tabId: activeTab.id,
+    });
+    setTranslationStatus('immersive-status', '已清除当前页译文', 'success');
+  } catch (error) {
+    setTranslationStatus('immersive-status', getErrorMessage(error) || '清除译文失败', 'error');
+  }
+}
+
+async function handleSimulcastStartClick(): Promise<void> {
+  try {
+    clearSimulcastStreamingOutput();
+    const credentials = {
+      apiKey: getControlValue(
+        'simulcast-api-key',
+        DEFAULT_SETTINGS.simultaneousInterpretation?.credentials.apiKey ?? ''
+      ),
+      appId: getControlValue(
+        'simulcast-app-id',
+        DEFAULT_SETTINGS.simultaneousInterpretation?.credentials.appId ?? ''
+      ),
+      accessToken: getControlValue(
+        'simulcast-access-token',
+        DEFAULT_SETTINGS.simultaneousInterpretation?.credentials.accessToken ?? ''
+      ),
+      secretKey: getControlValue(
+        'simulcast-secret-key',
+        DEFAULT_SETTINGS.simultaneousInterpretation?.credentials.secretKey ?? ''
+      ),
+      resourceId: DEFAULT_SETTINGS.simultaneousInterpretation?.credentials.resourceId ?? '',
+    };
+
+    buildVolcengineAstHeaders(credentials);
+    const streamIdPromise = requestCurrentTabMediaStreamId();
+    setTranslationStatus('simulcast-status', '正在创建当前标签页音频捕获会话...', 'info');
+
+    const [streamId, activeTab] = await Promise.all([streamIdPromise, getActiveTab()]);
+    if (typeof activeTab?.id !== 'number') {
+      throw new Error('未找到当前标签页');
+    }
+
+    const response = await safeSendRuntimeMessage<
+      unknown,
+      { simulcast?: { state?: string } }
+    >({
+      type: 'simulcast:start',
+      tabId: activeTab.id,
+      streamId,
+      sourceLanguage: getControlValue('simulcast-source-language', 'auto'),
+      targetLanguage: getControlValue('simulcast-target-language', 'zh-CN'),
+      model: getControlValue(
+        'simulcast-model',
+        DEFAULT_SETTINGS.simultaneousInterpretation?.model ??
+          'Doubao_scene_SLM_Doubao_SI_model2000000748711437826'
+      ),
+      audioOutputMode: getControlValue('simulcast-output-mode', 'translatedOnly'),
+      originalVolume: getNumberControlValue('simulcast-original-volume', 0.25),
+      translatedVolume: getNumberControlValue('simulcast-translated-volume', 1),
+      translatedAudioDelayMs: getDelayControlValue('simulcast-translated-delay-ms'),
+      subtitleDisplayMode: getControlValue('simulcast-subtitle-mode', 'bilingual'),
+      voiceCloneEnabled:
+        (document.getElementById('simulcast-voice-clone-toggle') as HTMLInputElement | null)
+          ?.checked !== false,
+      credentials,
+    });
+
+    if (response.status === 'error') {
+      throw new Error(response.error || '启动同声传译失败');
+    }
+
+    const simulcast = response.simulcast ?? response.data?.simulcast;
+
+    setTranslationStatus(
+      'simulcast-status',
+      simulcast?.state === 'capturing'
+        ? '已开始捕获当前标签页音频，等待接入火山 AST 流式协议输出译音。'
+        : '同声传译捕获会话已提交。',
+      'success'
+    );
+  } catch (error) {
+    setTranslationStatus('simulcast-status', getErrorMessage(error), 'error');
+  }
+}
+
+async function handleSimulcastStopClick(): Promise<void> {
+  try {
+    setTranslationStatus('simulcast-status', '正在停止同声传译...', 'info');
+    const response = await safeSendRuntimeMessage({
+      type: 'simulcast:stop',
+    });
+
+    if (response.status === 'error') {
+      throw new Error(response.error || '停止同声传译失败');
+    }
+
+    setTranslationStatus('simulcast-status', '已停止同声传译', 'success');
+  } catch (error) {
+    setTranslationStatus('simulcast-status', getErrorMessage(error), 'error');
+  }
+}
+
+function initializeTranslationActions(): void {
+  document
+    .getElementById('immersive-translate-current-page')
+    ?.addEventListener('click', () => {
+      void handleTranslateCurrentPageClick();
+    });
+
+  document.getElementById('immersive-clear-page')?.addEventListener('click', () => {
+    void handleClearPageTranslationsClick();
+  });
+
+  document.getElementById('simulcast-start-btn')?.addEventListener('click', () => {
+    void handleSimulcastStartClick();
+  });
+
+  document.getElementById('simulcast-stop-btn')?.addEventListener('click', () => {
+    void handleSimulcastStopClick();
+  });
+}
+
 function renderRuntimeDiagnostics(viewModel: RuntimeDiagnosticsViewModel): void {
   if (runtimeStatusElements.badge) {
     runtimeStatusElements.badge.textContent = viewModel.stateText;
@@ -558,6 +1016,7 @@ export function initPopup() {
 
     // 初始化记忆列表
     initializeMemoriesList();
+    initializeTranslationActions();
     if (ENABLE_RUNTIME_DIAGNOSTICS) {
       enqueueRefresh('refreshRuntimeDiagnostics');
     }
@@ -572,6 +1031,7 @@ export function initPopup() {
 
     // 初始化 LLM 设置
     initializeLlmSettings();
+    initializeSimulcastSettings();
 
     // 初始化推荐设置
     initializeRecommendSettings();
@@ -666,6 +1126,8 @@ function initializeMemoriesList() {
   const tabAttention = document.getElementById('tab-attention');
   const tabSummary = document.getElementById('tab-summary');
   const tabRecommend = document.getElementById('tab-recommend');
+  const tabImmersiveTranslation = document.getElementById('tab-immersive-translation');
+  const tabSimultaneousInterpretation = document.getElementById('tab-simultaneous-interpretation');
   const tabSettings = document.getElementById('tab-settings');
 
   if (tabAttention) {
@@ -676,6 +1138,12 @@ function initializeMemoriesList() {
   }
   if (tabRecommend) {
     tabRecommend.addEventListener('click', () => switchTab('recommend'));
+  }
+  if (tabImmersiveTranslation) {
+    tabImmersiveTranslation.addEventListener('click', () => switchTab('immersive-translation'));
+  }
+  if (tabSimultaneousInterpretation) {
+    tabSimultaneousInterpretation.addEventListener('click', () => switchTab('simultaneous-interpretation'));
   }
   if (tabSettings) {
     tabSettings.addEventListener('click', () => switchTab('settings'));
@@ -1057,6 +1525,8 @@ function setupMessageListeners() {
 
     const notificationHandlers: Record<string, (m: any, r: (resp: any) => void) => void> = {
       settingsUpdated: handleSettingsUpdated,
+      'simulcast:update': handleSimulcastUpdate,
+      'simulcast:popupUpdate': handleSimulcastUpdate,
     };
 
     const handler = typeof messageType === 'string' ? asyncHandlers[messageType] : undefined;
@@ -1673,6 +2143,45 @@ async function viewSummaryResult(taskId: string, title: string): Promise<void> {
 // LLM 设置
 // ============================================================================
 
+function initializeSimulcastSettings(): void {
+  void (async () => {
+    const [settings, localPrefill] = await Promise.all([
+      getStoredSettings(),
+      loadLocalCredentialPrefill(),
+    ]);
+    const defaults = DEFAULT_SETTINGS.simultaneousInterpretation;
+    if (!defaults) {
+      return;
+    }
+
+    const simulcast = resolveSimulcastCredentialPrefill(
+      settings?.simultaneousInterpretation,
+      localPrefill.simultaneousInterpretation,
+      defaults
+    );
+
+    setControlValue('simulcast-source-language', simulcast.sourceLanguage);
+    setControlValue('simulcast-target-language', simulcast.targetLanguage);
+    setControlValue('simulcast-model', simulcast.model);
+    setControlValue('simulcast-api-key', simulcast.credentials.apiKey);
+    setControlValue('simulcast-app-id', simulcast.credentials.appId);
+    setControlValue('simulcast-access-token', simulcast.credentials.accessToken);
+    setControlValue('simulcast-secret-key', simulcast.credentials.secretKey);
+    setControlValue('simulcast-output-mode', simulcast.audioOutputMode);
+    setControlValue('simulcast-subtitle-mode', simulcast.subtitleDisplayMode);
+    setControlValue('simulcast-original-volume', simulcast.originalVolume);
+    setControlValue('simulcast-translated-volume', simulcast.translatedVolume);
+    setControlValue('simulcast-translated-delay-ms', simulcast.translatedAudioDelayMs);
+
+    const voiceCloneToggle = document.getElementById(
+      'simulcast-voice-clone-toggle'
+    ) as HTMLInputElement | null;
+    if (voiceCloneToggle) {
+      voiceCloneToggle.checked = simulcast.voiceCloneEnabled;
+    }
+  })();
+}
+
 function initializeLlmSettings(): void {
   const providerSelect = document.getElementById('llm-provider') as HTMLSelectElement | null;
   const baseUrlGroup = document.getElementById('llm-base-url-group');
@@ -1687,9 +2196,15 @@ function initializeLlmSettings(): void {
   });
 
   // 加载已保存的配置
-  chrome.storage.sync.get(['settings'], (result) => {
-    const settings = result.settings as AppSettings | undefined;
-    const llm = settings?.llmApi;
+  void (async () => {
+    const [settings, localPrefill] = await Promise.all([
+      getStoredSettings(),
+      loadLocalCredentialPrefill(),
+    ]);
+    const llm = resolveLlmCredentialPrefill(
+      settings?.llmApi ?? DEFAULT_SETTINGS.llmApi,
+      localPrefill.llmApi
+    );
     if (llm) {
       if (providerSelect) providerSelect.value = llm.provider || 'bailian';
       const keyInput = document.getElementById('llm-api-key') as HTMLInputElement | null;
@@ -1702,7 +2217,7 @@ function initializeLlmSettings(): void {
         baseUrlGroup.classList.toggle('hidden', llm.provider !== 'custom');
       }
     }
-  });
+  })();
 
   // 保存
   saveBtn?.addEventListener('click', () => {
@@ -1770,7 +2285,15 @@ function initializeRecommendSettings(): void {
   }
 }
 
-function switchTab(tabName: 'attention' | 'summary' | 'recommend' | 'settings'): void {
+type PopupTabName =
+  | 'attention'
+  | 'summary'
+  | 'recommend'
+  | 'immersive-translation'
+  | 'simultaneous-interpretation'
+  | 'settings';
+
+function switchTab(tabName: PopupTabName): void {
   Logger.debug(`[Popup] 切换标签页: ${tabName}`);
 
   const tabs = document.querySelectorAll('.sidebar-btn');

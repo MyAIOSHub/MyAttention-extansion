@@ -1,6 +1,6 @@
 {
   "name": "saysoattention",
-  "version": "1.2.0",
+  "version": "1.5.0",
   "description": "SaySoAttention - Chrome Extension",
   "author": "chauncey",
   "license": "MIT",
@@ -11,6 +11,8 @@
     "build:chrome": "npm run build && node scripts/build.js",
     "verify:sw": "node scripts/verify-sw-build.js",
     "verify:content-script": "node scripts/verify-content-script-build.js",
+    "verify:extension-runtime": "node scripts/verify-extension-runtime.js",
+    "prefill:local": "node scripts/write-local-prefill.js",
     "lint": "eslint src --ext .ts,.tsx",
     "lint:fix": "eslint src --ext .ts,.tsx --fix",
     "format": "prettier --write \"src/**/*.ts\" \"src/**/*.tsx\" \"src/**/*.css\"",

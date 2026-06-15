@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>My Attention Options</title>
+  <link rel="stylesheet" href="../lib/tailwind.min.css">
+  <style>
+    :root {
+      color-scheme: light;
+      --page-bg: #f8fafc;
+      --panel-bg: #ffffff;
+      --text-main: #0f172a;
+      --text-muted: #64748b;
+      --line: #e2e8f0;
+      --accent: #2563eb;
+    }
+
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+      --page-bg: #111827;
+      --panel-bg: #182235;
+      --text-main: #f8fafc;
+      --text-muted: #9ca3af;
+      --line: #334155;
+      --accent: #60a5fa;
+    }
+
+    body {
+      background: var(--page-bg);
+      color: var(--text-main);
+    }
+
+    .options-panel {
+      background: var(--panel-bg);
+      border: 1px solid var(--line);
+    }
+
+    .muted {
+      color: var(--text-muted);
+    }
+
+    .accent {
+      color: var(--accent);
+    }
+
+    .setting-hidden {
+      display: none;
+    }
+
+    .command-palette-backdrop {
+      background: rgba(15, 23, 42, 0.48);
+    }
+  </style>
+</head>
+<body>
+  <main class="max-w-5xl mx-auto px-5 py-6">
+    <header class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between mb-5">
+      <div>
+        <h1 class="text-2xl font-semibold tracking-normal">Options</h1>
+        <p class="text-sm muted mt-1">沉浸式翻译、同声传译和阅读体验设置</p>
+      </div>
+      <div class="flex items-center gap-2">
+        <button id="open-command-palette" class="px-3 py-2 rounded-md border text-sm options-panel">Command palette</button>
+        <button id="save-options" class="px-3 py-2 rounded-md bg-blue-600 text-white text-sm">保存设置</button>
+      </div>
+    </header>
+
+    <section class="options-panel rounded-lg p-4 mb-4">
+      <label for="settings-search" class="block text-sm font-medium mb-2">设置搜索</label>
+      <input id="settings-search" class="w-full rounded-md border px-3 py-2 text-sm bg-transparent" type="search" placeholder="搜索 theme、language、beta、translation、simulcast">
+      <p id="settings-search-empty" class="hidden text-xs muted mt-2">没有匹配的设置项</p>
+    </section>
+
+    <section class="grid gap-4 md:grid-cols-2">
+      <article class="options-panel rounded-lg p-4" data-setting-item data-search="theme appearance dark light system 外观 主题">
+        <div class="flex items-start justify-between gap-3">
+          <div>
+            <h2 class="text-base font-semibold">主题 / 外观</h2>
+            <p class="text-sm muted mt-1">跟随系统，或固定为浅色/深色。</p>
+          </div>
+          <span class="text-xs accent">Appearance</span>
+        </div>
+        <div class="grid grid-cols-3 gap-2 mt-4" role="radiogroup" aria-label="Theme">
+          <label class="options-panel rounded-md px-3 py-2 text-sm cursor-pointer">
+            <input class="mr-1" type="radio" name="theme" value="system"> System
+          </label>
+          <label class="options-panel rounded-md px-3 py-2 text-sm cursor-pointer">
+            <input class="mr-1" type="radio" name="theme" value="light"> Light
+          </label>
+          <label class="options-panel rounded-md px-3 py-2 text-sm cursor-pointer">
+            <input class="mr-1" type="radio" name="theme" value="dark"> Dark
+          </label>
+        </div>
+      </article>
+
+      <article class="options-panel rounded-lg p-4" data-setting-item data-search="language i18n locale zh cn en 多语言 界面语言">
+        <div class="flex items-start justify-between gap-3">
+          <div>
+            <h2 class="text-base font-semibold">多语言 i18n</h2>
+            <p class="text-sm muted mt-1">选择扩展界面语言偏好。</p>
+          </div>
+          <span class="text-xs accent">Locale</span>
+        </div>
+        <label for="options-language" class="sr-only">Interface language</label>
+        <select id="options-language" class="w-full mt-4 rounded-md border px-3 py-2 text-sm bg-transparent">
+          <option value="system">System</option>
+          <option value="zh-CN">简体中文</option>
+          <option value="en">English</option>
+        </select>
+      </article>
+
+      <article class="options-panel rounded-lg p-4" data-setting-item data-search="beta experience experimental 开关 实验功能">
+        <div class="flex items-start justify-between gap-3">
+          <div>
+            <h2 class="text-base font-semibold">Beta Experience</h2>
+            <p class="text-sm muted mt-1">开启后显示实验性翻译体验入口。</p>
+          </div>
+          <label class="inline-flex items-center cursor-pointer">
+            <input id="beta-experience-toggle" type="checkbox" class="sr-only peer">
+            <span class="w-10 h-6 bg-gray-300 peer-checked:bg-blue-600 rounded-full relative after:absolute after:left-1 after:top-1 after:w-4 after:h-4 after:bg-white after:rounded-full peer-checked:after:translate-x-4 after:transition"></span>
+          </label>
+        </div>
+      </article>
+
+      <article class="options-panel rounded-lg p-4" data-setting-item data-search="command palette shortcut settings search 命令面板 设置搜索">
+        <div class="flex items-start justify-between gap-3">
+          <div>
+            <h2 class="text-base font-semibold">Options 体验</h2>
+            <p class="text-sm muted mt-1">启用命令面板和设置搜索。</p>
+          </div>
+        </div>
+        <div class="space-y-3 mt-4">
+          <label class="flex items-center justify-between gap-3 text-sm">
+            <span>Command palette</span>
+            <input id="command-palette-toggle" type="checkbox">
+          </label>
+          <label class="flex items-center justify-between gap-3 text-sm">
+            <span>Settings search</span>
+            <input id="settings-search-toggle" type="checkbox">
+          </label>
+        </div>
+      </article>
+    </section>
+
+    <section class="options-panel rounded-lg p-4 mt-4" data-setting-item data-search="translation immersive simulcast subtitles tts read frog 功能清单">
+      <h2 class="text-base font-semibold">Read Frog 功能映射</h2>
+      <div class="grid gap-2 sm:grid-cols-2 mt-3 text-sm muted">
+        <div>沉浸式网页翻译：Popup 页面和内容脚本</div>
+        <div>选区翻译：页面选择工具条</div>
+        <div>iframe 支持：后台 frame 广播与导航清理</div>
+        <div>视频同传：offscreen 标签页音频捕获</div>
+        <div>多 Provider：当前复用项目 LLM API 通道</div>
+        <div>TTS/字幕/批量请求：配置入口已预留</div>
+      </div>
+    </section>
+
+    <p id="options-status" class="hidden mt-4 text-sm"></p>
+  </main>
+
+  <div id="command-palette" class="hidden fixed inset-0 command-palette-backdrop p-4">
+    <div class="max-w-xl mx-auto mt-20 options-panel rounded-lg overflow-hidden">
+      <div class="p-3 border-b" style="border-color: var(--line);">
+        <input id="command-palette-search" class="w-full rounded-md border px-3 py-2 text-sm bg-transparent" type="search" placeholder="输入 save、theme、beta、language">
+      </div>
+      <div id="command-palette-results" class="max-h-80 overflow-auto p-2"></div>
+    </div>
+  </div>
+
+  <script type="module" src="../options.js"></script>
+</body>
+</html>

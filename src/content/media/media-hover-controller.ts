@@ -92,7 +92,9 @@ function createFallbackSummary(sourceUrl: string, mediaKind: 'image' | 'video' |
     if (fileName) {
       return normalizeText(fileName).slice(0, 160);
     }
-  } catch {}
+  } catch {
+    // Fall through to the generic media label when the URL cannot be parsed.
+  }
 
   return `${mediaKind} resource`;
 }

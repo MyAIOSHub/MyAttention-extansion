@@ -367,7 +367,7 @@ export function setAllConversationsForFilter(conversations: Conversation[]): voi
  * 获取当前筛选结果
  */
 export function getFilteredConversations(): Conversation[] {
-  return filteredConversations.length ? filteredConversations : allConversations;
+  return filteredConversations;
 }
 
 /**

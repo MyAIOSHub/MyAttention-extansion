@@ -46,9 +46,21 @@ import {
   isExtensionContextInvalidatedError,
   isRuntimeContextAvailable,
 } from '@/core/chrome-message';
+import { isTopLevelFrame } from '@/content/frame-scope';
 import { Logger } from '@/core/errors';
 import { createSnippetCaptureController } from '@/content/snippets/snippet-capture-controller';
 import { createMediaHoverController } from '@/content/media/media-hover-controller';
+import {
+  clearPageTranslations,
+  collectPageTranslationRequest,
+  renderPageTranslations,
+  runBatchedTranslation,
+} from '@/translation/page-translator';
+import {
+  createSelectionTranslationToolbar,
+  type SelectionTranslationToolbar,
+} from '@/translation/selection-toolbar';
+import type { TranslationMode, TranslationRange } from '@/translation/config';
 
 // ============================================================================
 // 常量定义
@@ -87,6 +99,8 @@ let snippetCaptureController:
 let mediaHoverController:
   | ReturnType<typeof createMediaHoverController>
   | null = null;
+let selectionTranslationToolbar: SelectionTranslationToolbar | null = null;
+let hasInitializedPageTranslationListener = false;
 
 /**
  * 自动保存稳定窗口（毫秒）
@@ -665,6 +679,7 @@ function initSettingsListener(): void {
         // 更新悬浮标签状态
         updateFloatTagState();
         snippetCaptureController?.refreshForUrlChange();
+        initSelectionTranslationToolbar();
       }
 
       sendResponse({ status: 'ok' });
@@ -815,6 +830,197 @@ function initRuntimeHealthListener(): void {
   Logger.info('[Content] 运行态健康监听已初始化');
 }
 
+// 整页翻译分批参数：每批的文本块数量与最大并发请求数。
+// 批次小→首段译文更快出现；并发→缩短整页总时长。
+// 并发=6：实测 DashScope qwen 6 路并发无限流、线性扩展，相比 3 路整页耗时约减半。
+const PAGE_TRANSLATION_BATCH_SIZE = 10;
+const PAGE_TRANSLATION_CONCURRENCY = 6;
+
+function normalizePageTranslationMode(value: unknown): TranslationMode {
+  return value === 'translationOnly' ? 'translationOnly' : 'bilingual';
+}
+
+function normalizePageTranslationRange(value: unknown): TranslationRange {
+  return value === 'all' || value === 'fullPage' ? 'all' : 'main';
+}
+
+function extractTranslationsFromResponse(
+  response: ChromeMessageResponse<any>
+): Array<{ id: string; text: string }> {
+  const payload = response.data || response;
+  const translations = payload?.translations;
+  return Array.isArray(translations) ? translations : [];
+}
+
+function getImmersiveTranslationSettings(): {
+  enabled?: boolean;
+  selectionToolbarEnabled?: boolean;
+  sourceLanguage?: string;
+  targetLanguage?: string;
+  textToSpeechEnabled?: boolean;
+} {
+  return ((getCurrentSettings() as any).immersiveTranslation || {}) as {
+    enabled?: boolean;
+    selectionToolbarEnabled?: boolean;
+    sourceLanguage?: string;
+    targetLanguage?: string;
+    textToSpeechEnabled?: boolean;
+  };
+}
+
+async function translateSelectedText(text: string): Promise<string> {
+  const settings = getImmersiveTranslationSettings();
+  const response = await chromeMessageAdapter.sendMessage({
+    type: 'translation:translatePageText',
+    request: {
+      sourceLanguage: settings.sourceLanguage || 'auto',
+      targetLanguage: settings.targetLanguage || 'zh-CN',
+      items: [{ id: 'sayso-selection', text }],
+    },
+  });
+
+  if (response.status === 'error') {
+    throw new Error(response.error || '翻译失败');
+  }
+
+  const translations = extractTranslationsFromResponse(response as ChromeMessageResponse<any>);
+  return translations[0]?.text || '';
+}
+
+async function explainSelectedTextForToolbar(text: string): Promise<string> {
+  const settings = getImmersiveTranslationSettings();
+  const response = await chromeMessageAdapter.sendMessage({
+    type: 'translation:explainText',
+    request: {
+      text,
+      targetLanguage: settings.targetLanguage || 'zh-CN',
+    },
+  });
+
+  if (response.status === 'error') {
+    throw new Error(response.error || '解释失败');
+  }
+
+  return response.explanation ?? response.data?.explanation ?? '';
+}
+
+function speakSelectedText(text: string): void {
+  if (!window.speechSynthesis || typeof SpeechSynthesisUtterance === 'undefined') {
+    throw new Error('当前浏览器不支持文本朗读');
+  }
+
+  const settings = getImmersiveTranslationSettings();
+  const utterance = new SpeechSynthesisUtterance(text);
+  if (settings.sourceLanguage && settings.sourceLanguage !== 'auto') {
+    utterance.lang = settings.sourceLanguage;
+  }
+  window.speechSynthesis.cancel();
+  window.speechSynthesis.speak(utterance);
+}
+
+function initSelectionTranslationToolbar(): void {
+  const settings = getImmersiveTranslationSettings();
+  if (settings.enabled === false || settings.selectionToolbarEnabled === false) {
+    selectionTranslationToolbar?.stop();
+    selectionTranslationToolbar = null;
+    return;
+  }
+
+  if (selectionTranslationToolbar) {
+    return;
+  }
+
+  selectionTranslationToolbar = createSelectionTranslationToolbar({
+    onTranslate: translateSelectedText,
+    onExplain: explainSelectedTextForToolbar,
+    onSpeak: settings.textToSpeechEnabled === false ? undefined : speakSelectedText,
+  });
+  selectionTranslationToolbar.start();
+  Logger.info('[Content] 选词翻译工具条已初始化');
+}
+
+function initPageTranslationListener(): void {
+  if (hasInitializedPageTranslationListener) {
+    return;
+  }
+  hasInitializedPageTranslationListener = true;
+
+  try {
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      if (message.type === 'translation:clearPageTranslations') {
+        clearPageTranslations();
+        sendResponse({ status: 'ok' });
+        return true;
+      }
+
+      if (message.type !== 'translation:translateCurrentPage') {
+        return undefined;
+      }
+
+      void (async () => {
+        try {
+          const mode = normalizePageTranslationMode(message.mode);
+          const request = collectPageTranslationRequest({
+            sourceLanguage: message.sourceLanguage || 'auto',
+            targetLanguage: message.targetLanguage || 'zh-CN',
+            mode,
+            range: normalizePageTranslationRange(message.range),
+          });
+
+          if (!request.items.length) {
+            sendResponse({ status: 'ok', translatedCount: 0 });
+            return;
+          }
+
+          // 分批并发翻译：每批返回即渲染，译文逐段出现而非整页一次性等待。
+          const { translatedCount, firstError } = await runBatchedTranslation({
+            items: request.items,
+            batchSize: PAGE_TRANSLATION_BATCH_SIZE,
+            concurrency: PAGE_TRANSLATION_CONCURRENCY,
+            translateBatch: async (batchItems) => {
+              const response = await chromeMessageAdapter.sendMessage({
+                type: 'translation:translatePageText',
+                request: { ...request, items: batchItems },
+              });
+              if (response.status === 'error') {
+                throw new Error(response.error || '翻译失败');
+              }
+              return extractTranslationsFromResponse(response as ChromeMessageResponse<any>);
+            },
+            onBatch: (translations) => {
+              renderPageTranslations({ mode, translations });
+            },
+          });
+
+          if (translatedCount === 0 && firstError) {
+            sendResponse({ status: 'error', error: firstError });
+            return;
+          }
+
+          sendResponse({
+            status: 'ok',
+            translatedCount,
+          });
+        } catch (error) {
+          sendResponse({
+            status: 'error',
+            error: stringifyError(error),
+          });
+        }
+      })();
+
+      return true;
+    });
+  } catch (error) {
+    if (handleRuntimeContextInvalidated('页面翻译监听初始化', error)) {
+      return;
+    }
+    throw error;
+  }
+
+  Logger.info('[Content] 页面翻译监听已初始化');
+}
+
 // ============================================================================
 // 导出全局 API（供原 JavaScript 代码使用）
 // ============================================================================
@@ -852,6 +1058,8 @@ window.saySo = {
     snippetCaptureController = null;
     mediaHoverController?.stop();
     mediaHoverController = null;
+    selectionTranslationToolbar?.stop();
+    selectionTranslationToolbar = null;
 
     // 清理悬浮标签
     cleanupFloatTags();
@@ -885,31 +1093,40 @@ async function init(): Promise<void> {
 
     Logger.info('[Content] 当前设置:', getCurrentSettings());
 
-    // 初始化侧边栏消息监听
-    initSidebarMessageListener();
+    const isPageFrame = isTopLevelFrame();
 
-    // 初始化 snippets 采集控制器
-    initSnippetCaptureController();
-    initMediaHoverController();
+    if (isPageFrame) {
+      // 初始化侧边栏消息监听
+      initSidebarMessageListener();
 
-    // 激活当前平台
-    const currentPlatform = getCurrentPlatformConfig();
+      // 初始化 snippets 采集控制器
+      initSnippetCaptureController();
+      initMediaHoverController();
 
-    if (currentPlatform) {
-      safeInit(() => {
-        try {
-          initFloatTag();
-          validateFloatTagVisibility();
-        } catch (error) {
-          Logger.error('[Content] 悬浮标签初始化失败:', error);
-          reportRuntimeStatus({ lastError: 'FLOAT_TAG_INIT_FAILED' });
-        }
-      });
-      activatePlatform(currentPlatform);
+      // 激活当前平台
+      const currentPlatform = getCurrentPlatformConfig();
+
+      if (currentPlatform) {
+        safeInit(() => {
+          try {
+            initFloatTag();
+            validateFloatTagVisibility();
+          } catch (error) {
+            Logger.error('[Content] 悬浮标签初始化失败:', error);
+            reportRuntimeStatus({ lastError: 'FLOAT_TAG_INIT_FAILED' });
+          }
+        });
+        activatePlatform(currentPlatform);
+      }
+    } else {
+      cleanupSidebar();
+      cleanupFloatTags();
     }
 
     // 启动 URL 监听
-    startUrlMonitoring();
+    if (isPageFrame) {
+      startUrlMonitoring();
+    }
 
     // 初始化设置监听
     initSettingsListener();
@@ -922,6 +1139,12 @@ async function init(): Promise<void> {
 
     // 初始化运行态健康监听
     initRuntimeHealthListener();
+
+    // 初始化页面翻译监听
+    initPageTranslationListener();
+    if (isPageFrame) {
+      initSelectionTranslationToolbar();
+    }
 
     reportRuntimeStatus({
       injected: true,

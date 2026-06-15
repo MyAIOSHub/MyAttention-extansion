@@ -26,6 +26,13 @@ describe('popup message router', () => {
     expect(decision.shouldLogUnknown).toBe(false);
   });
 
+  it('routes simulcast subtitle updates as notifications', () => {
+    const router = createPopupMessageRouter();
+
+    expect(router.classify('simulcast:update', false).kind).toBe('notification');
+    expect(router.classify('simulcast:popupUpdate', false).kind).toBe('notification');
+  });
+
   it('samples unknown message logs within a 60s window', () => {
     let now = 1_000;
     const router = createPopupMessageRouter({

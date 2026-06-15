@@ -138,6 +138,7 @@ export const CONTEXT_MENU_IDS = {
   PAGE: 'sayso-page',
   LINK: 'sayso-link',
   MEDIA: 'sayso-media',
+  TRANSLATE_PAGE: 'sayso-translate-page',
 } as const;
 
 // ============================================================================

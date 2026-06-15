@@ -83,7 +83,7 @@ describe('snippet status badge', () => {
     expect(setBadgeText).toHaveBeenCalledWith({ tabId: 7, text: '•' });
     expect(setBadgeBackgroundColor).toHaveBeenCalledWith({
       tabId: 7,
-      color: '#3b82f6',
+      color: '#5e6ad2',
     });
   });
 });

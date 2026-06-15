@@ -1,0 +1,1 @@
+System.register([],function(t,e){"use strict";return{execute:function(){t("n",function(t){const n="number"==typeof t?t:"string"==typeof t?Number(t):Number.NaN;return Number.isFinite(n)?Math.min(e,Math.max(0,Math.round(n))):0});const e=5e3}}});

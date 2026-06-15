@@ -7,7 +7,7 @@ import { Logger, ErrorFactory } from '@/core/errors';
 import { messageHandlers } from './handlers';
 import { chromeMessageAdapter } from '@/core/chrome-message';
 import { eventBus } from '@/core/event-bus';
-import { DEFAULT_SETTINGS } from '@/types';
+import { DEFAULT_SETTINGS, type AppSettings, type ChromeMessageRequest, type ChromeMessageResponse } from '@/types';
 import { isCapturablePage } from '@/core/page-scope';
 import { CONTEXT_MENU_IDS } from '@/core/constants';
 import {
@@ -32,6 +32,25 @@ import {
 } from './recommendation-engine';
 import { startTabMonitor, cleanupTabMonitor } from './tab-monitor';
 import { notifySummaryCompleted } from './myisland-client';
+import {
+  SimulcastRuntime,
+  type StartSimulcastRequest,
+} from './simulcast-runtime';
+import { normalizeSimulcastPlaybackDelayMs } from '@/offscreen/simulcast-delay';
+import {
+  TranslationIframeRuntime,
+  type PageTranslationFrameRequest,
+  type TranslationFrameInfo,
+} from './translation-iframe-runtime';
+import {
+  installVolcengineAstAuthRule,
+  removeVolcengineAstAuthRule,
+} from './volcengine-ast-auth-rules';
+
+// 后台异步初始化（设置 / Local Store 等）的就绪 Promise。
+// 事件监听器在顶层同步注册，但消息处理需等待初始化完成后再分发，
+// 避免在 Service Worker 冷启动时读到未初始化状态。
+let readyPromise: Promise<void> = Promise.resolve();
 
 // ============================================================================
 // 初始化设置
@@ -148,6 +167,214 @@ const CONTENT_SCRIPT_FILES = {
   js: ['content-script.js'],
 } as const;
 
+function getChromeLastErrorMessage(): string | null {
+  try {
+    return chrome.runtime.lastError?.message || null;
+  } catch {
+    return null;
+  }
+}
+
+function getTabMediaStreamId(tabId: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    chrome.tabCapture.getMediaStreamId({ targetTabId: tabId }, (streamId) => {
+      const errorMessage = getChromeLastErrorMessage();
+      if (errorMessage) {
+        reject(new Error(errorMessage));
+        return;
+      }
+      if (!streamId) {
+        reject(new Error('无法获取当前标签页音频流'));
+        return;
+      }
+      resolve(streamId);
+    });
+  });
+}
+
+function sendRuntimeMessageToOffscreen(message: Record<string, unknown>): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage(message, (response) => {
+      const errorMessage = getChromeLastErrorMessage();
+      if (errorMessage) {
+        reject(new Error(errorMessage));
+        return;
+      }
+      if (response?.status === 'error') {
+        reject(new Error(response.error || 'offscreen 同传任务失败'));
+        return;
+      }
+      resolve(response);
+    });
+  });
+}
+
+function broadcastRuntimeNotification(message: Record<string, unknown>): Promise<void> {
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage(message, () => {
+      void getChromeLastErrorMessage();
+      resolve();
+    });
+  });
+}
+
+const simulcastRuntime = new SimulcastRuntime({
+  hasOffscreenDocument: () => chrome.offscreen.hasDocument(),
+  createOffscreenDocument: (parameters) =>
+    chrome.offscreen.createDocument({
+      url: parameters.url,
+      reasons: parameters.reasons.map(
+        (reason) => chrome.offscreen.Reason[reason as keyof typeof chrome.offscreen.Reason]
+      ),
+      justification: parameters.justification,
+    }),
+  closeOffscreenDocument: () => chrome.offscreen.closeDocument(),
+  getTabMediaStreamId,
+  sendRuntimeMessage: sendRuntimeMessageToOffscreen,
+  installAstAuthRule: (headers) =>
+    installVolcengineAstAuthRule(chrome.declarativeNetRequest, headers),
+  removeAstAuthRule: () => removeVolcengineAstAuthRule(chrome.declarativeNetRequest),
+  now: () => new Date().toISOString(),
+  wait: (delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs)),
+});
+
+function getAllFramesForTab(tabId: number): Promise<TranslationFrameInfo[]> {
+  return new Promise((resolve, reject) => {
+    chrome.webNavigation.getAllFrames({ tabId }, (frames) => {
+      const errorMessage = getChromeLastErrorMessage();
+      if (errorMessage) {
+        reject(new Error(errorMessage));
+        return;
+      }
+
+      resolve(
+        (frames || []).map((frame) => ({
+          frameId: frame.frameId,
+          parentFrameId: frame.parentFrameId,
+          url: frame.url,
+        }))
+      );
+    });
+  });
+}
+
+function sendMessageToFrame(
+  tabId: number,
+  frameId: number,
+  message: ChromeMessageRequest
+): Promise<ChromeMessageResponse<{ translatedCount?: number }>> {
+  return new Promise((resolve, reject) => {
+    chrome.tabs.sendMessage(tabId, message, { frameId }, (response) => {
+      const errorMessage = getChromeLastErrorMessage();
+      if (errorMessage) {
+        reject(new Error(errorMessage));
+        return;
+      }
+
+      resolve((response || {}) as ChromeMessageResponse<{ translatedCount?: number }>);
+    });
+  });
+}
+
+async function ensureFrameContentScript(tabId: number, frameId: number): Promise<void> {
+  await chrome.scripting.insertCSS({
+    target: { tabId, frameIds: [frameId] },
+    files: [...CONTENT_SCRIPT_FILES.css],
+  });
+  await chrome.scripting.executeScript({
+    target: { tabId, frameIds: [frameId] },
+    files: [...CONTENT_SCRIPT_FILES.js],
+  });
+}
+
+type RuntimeMessageParams = Record<string, unknown>;
+
+const translationIframeRuntime = new TranslationIframeRuntime({
+  getAllFrames: getAllFramesForTab,
+  sendMessageToFrame,
+  ensureFrameContentScript,
+  now: () => Date.now(),
+});
+
+function getStringParam(value: unknown, fallback: string): string {
+  return typeof value === 'string' && value.length > 0 ? value : fallback;
+}
+
+function getRecordParam(value: unknown): RuntimeMessageParams {
+  return typeof value === 'object' && value !== null ? (value as RuntimeMessageParams) : {};
+}
+
+function buildStartSimulcastRequest(params: RuntimeMessageParams): StartSimulcastRequest {
+  if (typeof params.tabId !== 'number') {
+    throw new Error('启动同声传译需要当前标签页 ID');
+  }
+
+  const credentials = getRecordParam(params.credentials);
+
+  return {
+    tabId: params.tabId,
+    streamId: getStringParam(params.streamId, '') || undefined,
+    sourceLanguage: getStringParam(params.sourceLanguage, 'auto'),
+    targetLanguage: getStringParam(params.targetLanguage, 'zh-CN'),
+    model: getStringParam(
+      params.model,
+      'Doubao_scene_SLM_Doubao_SI_model2000000748711437826'
+    ),
+    audioOutputMode: getStringParam(
+      params.audioOutputMode,
+      'translatedOnly'
+    ) as StartSimulcastRequest['audioOutputMode'],
+    originalVolume: normalizeVolume(params.originalVolume, 0.25),
+    translatedVolume: normalizeVolume(params.translatedVolume, 1),
+    translatedAudioDelayMs: normalizeSimulcastPlaybackDelayMs(params.translatedAudioDelayMs),
+    subtitleDisplayMode: getStringParam(
+      params.subtitleDisplayMode,
+      'bilingual'
+    ) as StartSimulcastRequest['subtitleDisplayMode'],
+    voiceCloneEnabled: params.voiceCloneEnabled !== false,
+    credentials: {
+      apiKey: getStringParam(credentials.apiKey, ''),
+      appId: getStringParam(credentials.appId, ''),
+      accessToken: getStringParam(credentials.accessToken, ''),
+      secretKey: getStringParam(credentials.secretKey, ''),
+      resourceId: getStringParam(credentials.resourceId, ''),
+    },
+  };
+}
+
+function normalizeVolume(value: unknown, fallback: number): number {
+  const numberValue =
+    typeof value === 'number'
+      ? value
+      : typeof value === 'string'
+        ? Number(value)
+        : Number.NaN;
+
+  if (!Number.isFinite(numberValue)) {
+    return fallback;
+  }
+
+  return Math.min(1, Math.max(0, numberValue));
+}
+
+function getRequiredTabId(params: RuntimeMessageParams, operation: string): number {
+  if (typeof params.tabId !== 'number') {
+    throw new Error(`${operation}需要当前标签页 ID`);
+  }
+  return params.tabId;
+}
+
+function buildPageTranslationFrameRequest(
+  params: RuntimeMessageParams
+): PageTranslationFrameRequest {
+  return {
+    sourceLanguage: getStringParam(params.sourceLanguage, 'auto'),
+    targetLanguage: getStringParam(params.targetLanguage, 'zh-CN'),
+    mode: getStringParam(params.mode, 'bilingual') as PageTranslationFrameRequest['mode'],
+    range: getStringParam(params.range, 'main') as PageTranslationFrameRequest['range'],
+  };
+}
+
 async function pingContentScript(tabId: number): Promise<boolean> {
   return new Promise((resolve) => {
     try {
@@ -168,11 +395,11 @@ async function pingContentScript(tabId: number): Promise<boolean> {
 
 async function injectContentScript(tabId: number): Promise<void> {
   await chrome.scripting.insertCSS({
-    target: { tabId },
+    target: { tabId, allFrames: true },
     files: [...CONTENT_SCRIPT_FILES.css],
   });
   await chrome.scripting.executeScript({
-    target: { tabId },
+    target: { tabId, allFrames: true },
     files: [...CONTENT_SCRIPT_FILES.js],
   });
 }
@@ -254,6 +481,32 @@ function setupTabBehaviorListeners(): void {
   chrome.tabs.onRemoved.addListener((tabId) => {
     messageHandlers.handleClearTabRuntimeStatus(tabId);
     cleanupTabMonitor(tabId);
+    translationIframeRuntime.clearTabState(tabId);
+  });
+
+  chrome.webNavigation.onBeforeNavigate.addListener((details) => {
+    if (details.frameId === 0) {
+      translationIframeRuntime.clearTabState(details.tabId);
+      return;
+    }
+    translationIframeRuntime.clearFrameState(details.tabId, details.frameId);
+  });
+
+  chrome.webNavigation.onCompleted.addListener((details) => {
+    if (details.frameId === 0) {
+      return;
+    }
+
+    void translationIframeRuntime.handleFrameCompleted({
+      tabId: details.tabId,
+      frameId: details.frameId,
+    }).catch((error) => {
+      Logger.warn('[Background] iframe 翻译运行时注入失败', {
+        tabId: details.tabId,
+        frameId: details.frameId,
+        error: stringifyError(error),
+      });
+    });
   });
 
   chrome.storage.onChanged.addListener((changes, areaName) => {
@@ -415,6 +668,61 @@ const messageHandlersMap: Record<
   'getSettings': async () => {
     const settings = await messageHandlers.handleGetSettings();
     return { settings };
+  },
+
+  'translation:translatePageText': async (params) => {
+    const result = await messageHandlers.handleTranslatePageText(params.request || params);
+    return result;
+  },
+
+  'translation:explainText': async (params) => {
+    return await messageHandlers.handleExplainText(params.request || params);
+  },
+
+  'translation:translateTabFrames': async (params) => {
+    return await translationIframeRuntime.translateTabFrames(
+      getRequiredTabId(params, '翻译当前页面'),
+      buildPageTranslationFrameRequest(params)
+    );
+  },
+
+  'translation:clearTabTranslations': async (params) => {
+    return await translationIframeRuntime.clearTabTranslations(
+      getRequiredTabId(params, '清除当前页面译文')
+    );
+  },
+
+  'simulcast:start': async (params) => {
+    const simulcast = await simulcastRuntime.start(buildStartSimulcastRequest(params));
+    return { simulcast };
+  },
+
+  'simulcast:stop': async () => {
+    const simulcast = await simulcastRuntime.stop();
+    return { simulcast };
+  },
+
+  'simulcast:getStatus': async () => {
+    return { simulcast: simulcastRuntime.getStatus() };
+  },
+
+  'simulcast:update': async (params) => {
+    Logger.debug('[Background] 同声传译更新:', {
+      tabId: params.tabId,
+      subtitle: params.subtitle,
+      status: params.status,
+    });
+    await broadcastRuntimeNotification({
+      type: 'simulcast:popupUpdate',
+      tabId: params.tabId,
+      subtitle: params.subtitle,
+      status: params.status,
+    });
+    return { status: 'ok' };
+  },
+
+  'simulcast:popupUpdate': async () => {
+    return { status: 'ok' };
   },
 
   'exportConversationsByRange': async (params) => {
@@ -685,16 +993,24 @@ function setupMessageListeners(): void {
       }
 
       // LLM 调用等长时操作绕过 dispatcher 超时
-      const BYPASS_DISPATCHER_TYPES = new Set(['createSummaryTask', 'createRecommendationSession']);
+      const BYPASS_DISPATCHER_TYPES = new Set([
+        'createSummaryTask',
+        'createRecommendationSession',
+        'translation:translatePageText',
+        'translation:explainText',
+        'translation:translateTabFrames',
+      ]);
 
-      const dispatchPromise = (ENABLE_MESSAGE_DISPATCHER && !BYPASS_DISPATCHER_TYPES.has(message.type))
-        ? messageDispatcher.dispatch({
-            messageType: message.type,
-            params: message,
-            sender,
-            handler,
-          })
-        : Promise.resolve(handler(message, sender));
+      const dispatchPromise = readyPromise.then(() =>
+        (ENABLE_MESSAGE_DISPATCHER && !BYPASS_DISPATCHER_TYPES.has(message.type))
+          ? messageDispatcher.dispatch({
+              messageType: message.type,
+              params: message,
+              sender,
+              handler,
+            })
+          : handler(message, sender)
+      );
 
       dispatchPromise
         .then((result) => {
@@ -783,6 +1099,16 @@ async function refreshContextMenus(): Promise<void> {
   await removeAllContextMenus();
 
   try {
+    // 翻译菜单独立于网页采集功能：只要沉浸式翻译未被关闭就提供。
+    const settings = (await messageHandlers.handleGetSettings()) as AppSettings;
+    if (settings.immersiveTranslation?.enabled !== false) {
+      await createContextMenu({
+        id: CONTEXT_MENU_IDS.TRANSLATE_PAGE,
+        title: '翻译当前页面',
+        contexts: ['page'],
+      });
+    }
+
     const webCapture = await getBackgroundWebCaptureSettings();
     if (!webCapture.enabled || !webCapture.contextMenuEnabled) {
       return;
@@ -895,6 +1221,23 @@ async function handleContextMenuClick(
   const tabTitle = tab?.title || tabUrl || 'Untitled Page';
 
   if (!tabId || !tabUrl) {
+    return;
+  }
+
+  // 翻译当前页面：独立于网页采集开关，单独处理。
+  if (info.menuItemId === CONTEXT_MENU_IDS.TRANSLATE_PAGE) {
+    try {
+      const settings = (await messageHandlers.handleGetSettings()) as AppSettings;
+      const immersive = settings.immersiveTranslation;
+      await translationIframeRuntime.translateTabFrames(tabId, {
+        sourceLanguage: immersive?.sourceLanguage || 'auto',
+        targetLanguage: immersive?.targetLanguage || 'zh-CN',
+        mode: (immersive?.mode as PageTranslationFrameRequest['mode']) || 'bilingual',
+        range: (immersive?.range as PageTranslationFrameRequest['range']) || 'main',
+      });
+    } catch (error) {
+      Logger.error('[Background] 右键翻译当前页面失败:', error);
+    }
     return;
   }
 
@@ -1016,6 +1359,30 @@ async function syncExistingTasksToMyIsland(): Promise<void> {
   }
 }
 
+// 同步注册所有 chrome.* 事件监听器。
+// 必须在任何 await 之前的首个同步周期内完成，否则 MV3 冷启动时
+// 唤醒 Service Worker 的那个事件（图标点击 / 消息 / alarm）会丢失。
+function registerEventListeners(): void {
+  // 设置标签页行为监听器
+  setupTabBehaviorListeners();
+
+  // 设置扩展生命周期监听器
+  setupLifecycleListeners();
+
+  // 设置消息监听器
+  setupMessageListeners();
+
+  // 设置图标点击监听器
+  setupActionListener();
+
+  // 设置右键菜单入口
+  setupContextMenus();
+
+  // 启动后台标签页监控（MyIsland 通知）
+  startTabMonitor();
+}
+
+// 异步初始化（监听器注册后再执行）。消息分发会 await 此 Promise。
 async function initialize(): Promise<void> {
   Logger.info('[Background] 初始化 My Attention 后台服务');
 
@@ -1031,24 +1398,6 @@ async function initialize(): Promise<void> {
     } catch (error) {
       Logger.error('[Background] Local Store 初始化失败，将保持服务并等待手动恢复:', error);
     }
-
-    // 设置标签页行为监听器
-    setupTabBehaviorListeners();
-
-    // 设置扩展生命周期监听器
-    setupLifecycleListeners();
-
-    // 设置消息监听器
-    setupMessageListeners();
-
-    // 设置图标点击监听器
-    setupActionListener();
-
-    // 设置右键菜单入口
-    setupContextMenus();
-
-    // 启动后台标签页监控（MyIsland 通知）
-    startTabMonitor();
 
     // 启动后主动修复已打开标签页中的失效内容脚本（无页面刷新）
     await restoreContentScriptsForOpenTabs('background.initialize');
@@ -1068,8 +1417,10 @@ async function initialize(): Promise<void> {
   }
 }
 
-// 启动应用
-initialize().catch((error) => {
+// 启动应用：先同步注册监听器，再触发异步初始化。
+registerEventListeners();
+readyPromise = initialize();
+readyPromise.catch((error) => {
   Logger.error('[Background] 应用启动失败:', error);
 });
 
