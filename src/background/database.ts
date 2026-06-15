@@ -14,6 +14,7 @@ import type {
 import { Logger, ErrorFactory } from '@/core/errors';
 import { DB_NAME, DB_VERSION, STORES } from '@/types';
 import { normalizeAndDedupeMessages } from '@/core/storage/message-normalizer';
+import { cleanUrl } from '@/core/url';
 
 type StoreName = (typeof STORES)[keyof typeof STORES];
 
@@ -34,9 +35,6 @@ function requestToPromise<T = unknown>(request: IDBRequest<T>): Promise<T> {
   });
 }
 
-function cleanUrl(url: string): string {
-  return String(url || '').split(/[?#]/)[0];
-}
 
 function hashText(text: string): string {
   let hash = 2166136261;

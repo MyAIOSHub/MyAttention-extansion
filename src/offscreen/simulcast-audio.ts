@@ -212,6 +212,10 @@ function createAstSession(message: SimulcastOffscreenStartMessage): VolcengineAs
       onAudioChunk: (chunk): void => {
         ttsChunks.push(chunk);
       },
+      onError: (error): void => {
+        // 单帧解析/处理错误：记录但不终止会话
+        console.warn('[simulcast] AST 帧处理错误', error);
+      },
       onEvent: (response): void => {
         if (response.event === VOLCENGINE_AST_EVENTS.TTSSentenceStart) {
           ttsChunks = [];

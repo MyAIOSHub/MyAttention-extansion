@@ -692,8 +692,12 @@ export class MessageHandlers {
               type: 'settingsUpdated',
               settings,
             })
-            .catch(() => {
-              // 忽略无法发送消息的错误
+            .catch((error) => {
+              // 未注入/已关闭的标签页投递失败属预期；记 debug 以便排查异常投递。
+              Logger.debug('[MessageHandlers] settingsUpdated 投递标签页失败', {
+                tabId: tab.id,
+                error: error instanceof Error ? error.message : String(error),
+              });
             });
         }
       });
@@ -706,11 +710,16 @@ export class MessageHandlers {
           type: 'settingsUpdated',
           settings,
         })
-        .catch(() => {
-          // 忽略错误
+        .catch((error) => {
+          // 无接收端（popup/side panel 未打开）属预期；记 debug。
+          Logger.debug('[MessageHandlers] settingsUpdated 广播失败', {
+            error: error instanceof Error ? error.message : String(error),
+          });
         });
-    } catch (e) {
-      // 忽略错误
+    } catch (error) {
+      Logger.debug('[MessageHandlers] settingsUpdated 广播抛错', {
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 

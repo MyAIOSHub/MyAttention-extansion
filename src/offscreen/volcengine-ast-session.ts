@@ -43,6 +43,8 @@ export interface VolcengineAstSessionDependencies {
   onSubtitle?: (update: AstSubtitleUpdate) => void;
   onAudioChunk?: (chunk: Uint8Array) => void;
   onEvent?: (response: AstResponseFrame) => void;
+  /** 会话启动后发生的帧解析/处理错误（单帧失败，不终止会话） */
+  onError?: (error: Error) => void;
 }
 
 const WEBSOCKET_OPEN_STATE = 1;
@@ -118,18 +120,40 @@ export class VolcengineAstSession {
     };
     socket.onmessage = (event): void => {
       void this.handleMessage(event.data).catch((error) => {
-        this.startReject?.(error instanceof Error ? error : new Error(String(error)));
+        this.handleSessionError(error instanceof Error ? error : new Error(String(error)));
       });
     };
     socket.onerror = (): void => {
-      this.startReject?.(new Error('火山 AST WebSocket 连接失败'));
+      this.settleStart(new Error('火山 AST WebSocket 连接失败'));
     };
     socket.onclose = (): void => {
       if (!this.started) {
-        this.startReject?.(new Error('火山 AST WebSocket 在会话启动前关闭'));
+        this.settleStart(new Error('火山 AST WebSocket 在会话启动前关闭'));
       }
     };
     this.socket = socket;
+  }
+
+  /** 只结算一次启动 Promise；结算后清空两个 handler，杜绝重复 resolve/reject。 */
+  private settleStart(error?: Error): void {
+    const resolve = this.startResolve;
+    const reject = this.startReject;
+    this.startResolve = null;
+    this.startReject = null;
+    if (error) {
+      reject?.(error);
+    } else {
+      resolve?.();
+    }
+  }
+
+  /** 会话错误统一入口：启动前 → 拒绝启动；启动后 → 上报，不静默吞掉，不终止会话。 */
+  private handleSessionError(error: Error): void {
+    if (!this.started) {
+      this.settleStart(error);
+      return;
+    }
+    this.dependencies.onError?.(error);
   }
 
   waitUntilStarted(): Promise<void> {
@@ -160,12 +184,20 @@ export class VolcengineAstSession {
   }
 
   private async handleMessage(data: ArrayBuffer | Blob): Promise<void> {
-    const response = decodeAstResponseFrame(await normalizeMessageData(data));
+    const bytes = await normalizeMessageData(data);
+    let response: AstResponseFrame;
+    try {
+      response = decodeAstResponseFrame(bytes);
+    } catch (error) {
+      // 单帧解析失败：上报，但不终止会话（启动前则拒绝启动 Promise）
+      this.handleSessionError(error instanceof Error ? error : new Error(String(error)));
+      return;
+    }
     this.dependencies.onEvent?.(response);
 
     if (response.event === VOLCENGINE_AST_EVENTS.SessionStarted) {
       this.started = true;
-      this.startResolve?.();
+      this.settleStart();
       return;
     }
 
@@ -173,7 +205,7 @@ export class VolcengineAstSession {
       response.event === VOLCENGINE_AST_EVENTS.SessionFailed ||
       response.event === VOLCENGINE_AST_EVENTS.SessionCanceled
     ) {
-      this.startReject?.(new Error(response.message || '火山 AST 会话失败'));
+      this.settleStart(new Error(response.message || '火山 AST 会话失败'));
       return;
     }
 

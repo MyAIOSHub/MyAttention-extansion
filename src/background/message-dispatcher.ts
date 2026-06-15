@@ -1,4 +1,6 @@
 import { Logger } from '@/core/errors';
+import { cleanUrl } from '@/core/url';
+import { asNonEmptyString } from '@/core/string';
 
 export interface MessageDispatchPolicy {
   readCoalesceTypes: Set<string>;
@@ -282,46 +284,46 @@ export class MessageDispatcher {
 
   private extractWriteQueueKey(type: string, params: any): string {
     if (type === 'upsertSnippet') {
-      const dedupeKey = this.asNonEmptyString(params?.snippet?.dedupeKey);
+      const dedupeKey = asNonEmptyString(params?.snippet?.dedupeKey);
       if (dedupeKey) {
         return `snippet:${dedupeKey}`;
       }
     }
 
     if (type === 'saveMediaSnippet') {
-      const dedupeKey = this.asNonEmptyString(params?.snippet?.dedupeKey);
+      const dedupeKey = asNonEmptyString(params?.snippet?.dedupeKey);
       if (dedupeKey) {
         return `snippet-media:${dedupeKey}`;
       }
-      const sourceUrl = this.asNonEmptyString(params?.snippet?.media?.sourceUrl);
-      const url = this.asNonEmptyString(params?.snippet?.url);
+      const sourceUrl = asNonEmptyString(params?.snippet?.media?.sourceUrl);
+      const url = asNonEmptyString(params?.snippet?.url);
       if (sourceUrl || url) {
-        return `snippet-media:${this.cleanUrl(url || '')}:${sourceUrl || 'unknown'}`;
+        return `snippet-media:${cleanUrl(url || '')}:${sourceUrl || 'unknown'}`;
       }
     }
 
     if (type === 'upsertSnippetSelection') {
-      const groupKey = this.asNonEmptyString(params?.selection?.groupKey);
+      const groupKey = asNonEmptyString(params?.selection?.groupKey);
       if (groupKey) {
         return `snippet-group:${groupKey}`;
       }
 
-      const semanticBlockKey = this.asNonEmptyString(params?.selection?.semanticBlockKey);
-      const url = this.asNonEmptyString(params?.selection?.url);
+      const semanticBlockKey = asNonEmptyString(params?.selection?.semanticBlockKey);
+      const url = asNonEmptyString(params?.selection?.url);
       if (semanticBlockKey || url) {
-        return `snippet-group:${semanticBlockKey || 'unknown'}:${this.cleanUrl(url || '')}`;
+        return `snippet-group:${semanticBlockKey || 'unknown'}:${cleanUrl(url || '')}`;
       }
     }
 
     if (type === 'deleteSnippet') {
-      const snippetId = this.asNonEmptyString(params?.id);
+      const snippetId = asNonEmptyString(params?.id);
       if (snippetId) {
         return `snippet-id:${snippetId}`;
       }
     }
 
     if (type === 'mergeSnippets') {
-      const targetId = this.asNonEmptyString(params?.targetId);
+      const targetId = asNonEmptyString(params?.targetId);
       if (targetId) {
         return `snippet-merge:${targetId}`;
       }
@@ -329,7 +331,7 @@ export class MessageDispatcher {
     }
 
     if (type === 'deleteSnippetItem') {
-      const itemId = this.asNonEmptyString(params?.id);
+      const itemId = asNonEmptyString(params?.id);
       if (itemId) {
         return `snippet-item:${itemId}`;
       }
@@ -340,33 +342,33 @@ export class MessageDispatcher {
     }
 
     if (type === 'incrementalUpdate' || type === 'smartIncrementalUpdate') {
-      const conversationId = this.asNonEmptyString(params?.conversationId);
+      const conversationId = asNonEmptyString(params?.conversationId);
       if (conversationId) {
         return `conversation:${conversationId}`;
       }
     }
 
     if (type === 'deleteConversation') {
-      const conversationId = this.asNonEmptyString(params?.conversationId);
+      const conversationId = asNonEmptyString(params?.conversationId);
       if (conversationId) {
         return `conversation:${conversationId}`;
       }
     }
 
     const conversation = params?.conversation;
-    const conversationId = this.asNonEmptyString(conversation?.conversationId);
+    const conversationId = asNonEmptyString(conversation?.conversationId);
     if (conversationId) {
       return `conversation:${conversationId}`;
     }
 
-    const externalId = this.asNonEmptyString(conversation?.externalId);
+    const externalId = asNonEmptyString(conversation?.externalId);
     if (externalId) {
       return `external:${externalId}`;
     }
 
-    const link = this.asNonEmptyString(conversation?.link);
+    const link = asNonEmptyString(conversation?.link);
     if (link) {
-      return `url:${this.cleanUrl(link)}`;
+      return `url:${cleanUrl(link)}`;
     }
 
     return `global:${type}`;
@@ -505,17 +507,6 @@ export class MessageDispatcher {
     return JSON.stringify(String(value));
   }
 
-  private asNonEmptyString(value: unknown): string | null {
-    if (typeof value !== 'string') {
-      return null;
-    }
-    const trimmed = value.trim();
-    return trimmed.length > 0 ? trimmed : null;
-  }
-
-  private cleanUrl(url: string): string {
-    return url.split('#')[0].split('?')[0];
-  }
 }
 
 export const messageDispatcher = new MessageDispatcher();

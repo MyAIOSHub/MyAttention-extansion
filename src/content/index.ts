@@ -1131,8 +1131,10 @@ async function init(): Promise<void> {
     // 初始化设置监听
     initSettingsListener();
 
-    // 初始化手动保存监听
-    initManualSaveListener();
+    // 手动保存针对整页对话，仅顶层页面需要；子 iframe 注册会导致重复/无意义触发。
+    if (isPageFrame) {
+      initManualSaveListener();
+    }
 
     // 初始化事件总线监听
     initEventBusListeners();

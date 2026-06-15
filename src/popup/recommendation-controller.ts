@@ -201,8 +201,9 @@ function buildCardElement(sessionId: string, card: RecommendationCard): HTMLElem
     });
 
     card.saved = true;
+    // 异步期间用户可能切走并重渲染列表，wrapper 已脱离文档；避免改动孤立节点。
     const btn = wrapper.querySelector('[data-action="save"]');
-    if (btn) {
+    if (btn && document.contains(btn)) {
       btn.textContent = '已保存';
       btn.classList.add('opacity-60', 'pointer-events-none');
     }

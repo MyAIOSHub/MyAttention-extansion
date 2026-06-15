@@ -7,6 +7,7 @@ import { Logger, ErrorFactory } from '@/core/errors';
 import { messageHandlers } from './handlers';
 import { chromeMessageAdapter } from '@/core/chrome-message';
 import { eventBus } from '@/core/event-bus';
+import { cleanUrl } from '@/core/url';
 import { DEFAULT_SETTINGS, type AppSettings, type ChromeMessageRequest, type ChromeMessageResponse } from '@/types';
 import { isCapturablePage } from '@/core/page-scope';
 import { CONTEXT_MENU_IDS } from '@/core/constants';
@@ -990,6 +991,13 @@ const ENABLE_MESSAGE_DISPATCHER = true;
 function setupMessageListeners(): void {
   chrome.runtime.onMessage.addListener(
     (message, sender, sendResponse) => {
+      // onMessage 接收任意来源的对象，运行时不保证 message.type 是字符串。
+      if (!message || typeof message.type !== 'string' || message.type.length === 0) {
+        Logger.warn('[Background] 非法消息类型:', typeof message?.type, message?.type);
+        sendResponse({ status: 'error', error: 'Message type must be a non-empty string' });
+        return false;
+      }
+
       Logger.debug('[Background] 收到消息:', message.type);
 
       const handler = messageHandlersMap[message.type];
@@ -1170,10 +1178,6 @@ function normalizeContextMenuMediaKind(mediaType?: string): 'image' | 'video' | 
   return 'image';
 }
 
-function cleanContextMenuUrl(url: string): string {
-  return String(url || '').split('#')[0].split('?')[0];
-}
-
 async function fallbackSaveMediaFromContextMenu(
   info: chrome.contextMenus.OnClickData,
   tabId: number,
@@ -1187,7 +1191,7 @@ async function fallbackSaveMediaFromContextMenu(
   }
 
   const mediaKind = normalizeContextMenuMediaKind(info.mediaType);
-  const normalizedTabUrl = cleanContextMenuUrl(tabUrl);
+  const normalizedTabUrl = cleanUrl(tabUrl);
   const summaryText = sourceUrl.split('/').pop() || `${mediaKind} resource`;
   const allowLocalCopy = webCapture.mediaLocalCopyEnabled !== false;
 
