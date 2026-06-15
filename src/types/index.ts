@@ -188,6 +188,8 @@ export interface TabRuntimeStatus {
 export interface AppSettings {
   /** 是否启用自动保存 */
   autoSave: boolean;
+  /** 自定义主题色（#RRGGBB，空串表示使用默认主色） */
+  brandColor?: string;
   /** Options / 外观体验设置 */
   experience?: {
     theme: 'system' | 'light' | 'dark';
@@ -247,6 +249,7 @@ export interface AppSettings {
  */
 export const DEFAULT_SETTINGS: AppSettings = {
   autoSave: true,
+  brandColor: '',
   experience: {
     theme: 'system',
     language: 'system',

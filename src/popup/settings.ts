@@ -19,6 +19,7 @@ import {
   safeGetMessage,
 } from './chrome-safe';
 import { formatBytes } from './utils/index';
+import { syncBrandColor } from './brand-color-control';
 
 const STORAGE_WARNING_PERCENT = 80;
 
@@ -285,6 +286,8 @@ export function updateUI(settings: AppSettings): void {
   if (elements.recommendCacheHours) {
     elements.recommendCacheHours.value = String(settings.recommend?.cacheTtlHours ?? 24);
   }
+
+  syncBrandColor(settings.brandColor);
 
   updateStorageUsageDisplay();
 }

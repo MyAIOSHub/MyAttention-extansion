@@ -23,6 +23,15 @@
    "basicSettings": {
       "message": "基础设置"
    },
+   "appearanceSettings": {
+      "message": "外观"
+   },
+   "brandColorDesc": {
+      "message": "自定义界面主题色"
+   },
+   "resetDefault": {
+      "message": "恢复默认"
+   },
    "calculating": {
       "message": "计算中..."
    },

@@ -34,6 +34,7 @@ import {
   handleClearButtonClick,
   elements as settingsElements,
 } from './settings';
+import { initBrandColorControl } from './brand-color-control';
 import {
   setAllConversations,
   getCurrentConversationId,
@@ -1142,6 +1143,9 @@ function initializeSettingsManagement() {
 
   // 创建导出按钮下拉菜单（可选）
   createExportDropdown();
+
+  // 初始化自定义主题色控件
+  initBrandColorControl();
 
   Logger.debug('[Popup] 设置管理已初始化');
 }

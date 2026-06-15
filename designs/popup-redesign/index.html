@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>My Attention · Popup 重构</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Geist:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="styles.css" rel="stylesheet">
+</head>
+<body>
+  <header class="page-head">
+    <h1>My Attention · 右侧栏重构</h1>
+    <p>5 个 tab（翻译 / 转写 / 记录 / 总结 / 设置）· 图标+文字标签 · 三个视觉方向并排对比 · 浅色</p>
+    <div class="controls">
+      <div class="grp">
+        <span>尺寸</span>
+        <div class="seg">
+          <button data-size-opt="s">小 360</button>
+          <button data-size-opt="m" class="on">中 400</button>
+          <button data-size-opt="l">大 462</button>
+        </div>
+      </div>
+      <div class="grp">
+        <span>提示</span>
+        <span style="font-weight:500;color:#6b7280;">点任意 tab / 子标签 / 开关，三版同步切换</span>
+      </div>
+    </div>
+  </header>
+
+  <main id="stage" class="stage"></main>
+
+  <script src="https://unpkg.com/lucide@0.460.0/dist/umd/lucide.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

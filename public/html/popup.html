@@ -11,7 +11,13 @@
       /* Linear-inspired light theme */
       --primary-color: #5e6ad2;
       --primary-hover: #7170ff;
-      --primary-light: rgba(94, 106, 210, 0.08);
+      /* 浅色/描边/阴影统一由 --primary-color 经 color-mix 派生，改主色即可整体换肤 */
+      --primary-light: color-mix(in srgb, var(--primary-color) 8%, transparent);
+      --primary-a04: color-mix(in srgb, var(--primary-color) 4%, transparent);
+      --primary-a12: color-mix(in srgb, var(--primary-color) 12%, transparent);
+      --primary-a15: color-mix(in srgb, var(--primary-color) 15%, transparent);
+      --primary-a20: color-mix(in srgb, var(--primary-color) 20%, transparent);
+      --primary-a25: color-mix(in srgb, var(--primary-color) 25%, transparent);
       --bg-color: #f7f8f8;
       --bg-surface: #ffffff;
       --bg-elevated: #f3f4f5;
@@ -100,16 +106,38 @@
     
     /* 统一的平台标签样式 */
     /* Linear brand utility classes (Tailwind JIT not available) */
-    .btn-brand { background-color: #5e6ad2; color: #fff; }
-    .btn-brand:hover { background-color: #7170ff; }
-    .btn-brand-light { background-color: rgba(94,106,210,0.08); color: #5e6ad2; }
-    .btn-brand-light:hover { background-color: rgba(94,106,210,0.12); }
-    .text-brand { color: #5e6ad2; }
-    .text-brand-hover:hover { color: #5e6ad2; }
-    .text-brand-light { color: #828fff; }
-    .bg-brand-light { background-color: rgba(94,106,210,0.08); }
-    .border-brand { border-color: rgba(94,106,210,0.2); }
-    .ring-brand:focus { --tw-ring-color: #5e6ad2; }
+    .btn-brand { background-color: var(--primary-color); color: #fff; }
+    .btn-brand:hover { background-color: var(--primary-hover); }
+    .btn-brand-light { background-color: var(--primary-light); color: var(--primary-color); }
+    .btn-brand-light:hover { background-color: var(--primary-a12); }
+    .text-brand { color: var(--primary-color); }
+    .text-brand-hover:hover { color: var(--primary-color); }
+    .text-brand-light { color: var(--primary-hover); }
+    .bg-brand-light { background-color: var(--primary-light); }
+    .border-brand { border-color: var(--primary-a20); }
+    .ring-brand:focus { --tw-ring-color: var(--primary-color); }
+
+    /* 自定义主题色控件 */
+    .brand-swatch {
+      width: 26px; height: 26px; border-radius: 50%;
+      border: 1px solid var(--border-color); cursor: pointer; padding: 0;
+      transition: transform 0.12s ease;
+    }
+    .brand-swatch:hover { transform: scale(1.1); }
+    .brand-swatch-active {
+      box-shadow: 0 0 0 2px var(--bg-surface), 0 0 0 4px var(--primary-color);
+    }
+    .brand-color-trigger {
+      position: relative; width: 38px; height: 38px; border-radius: 50%;
+      overflow: hidden; border: 1px solid var(--border-color); cursor: pointer; flex-shrink: 0;
+    }
+    .brand-color-trigger input[type="color"] {
+      position: absolute; top: -6px; left: -6px;
+      width: calc(100% + 12px); height: calc(100% + 12px);
+      border: none; padding: 0; background: transparent; cursor: pointer;
+    }
+    .brand-color-trigger input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
+    .brand-color-trigger input[type="color"]::-webkit-color-swatch { border: none; }
 
     .attention-pill {
       font-weight: 500;
@@ -118,7 +146,7 @@
     .attention-pill.active {
       background-color: var(--primary-color);
       color: #ffffff;
-      box-shadow: rgba(94, 106, 210, 0.2) 0px 1px 3px;
+      box-shadow: var(--primary-a20) 0px 1px 3px;
     }
     .attention-pill:not(.active):hover {
       background-color: rgba(0, 0, 0, 0.06);
@@ -126,7 +154,7 @@
     .summary-mode-pill.active {
       background-color: var(--primary-color);
       color: #ffffff;
-      box-shadow: rgba(94, 106, 210, 0.2) 0px 1px 3px;
+      box-shadow: var(--primary-a20) 0px 1px 3px;
     }
     .summary-mode-pill:not(.active):hover {
       background-color: rgba(0, 0, 0, 0.06);
@@ -301,8 +329,8 @@
     }
     
     .message-user {
-      background: rgba(94, 106, 210, 0.04);
-      border: 1px solid rgba(94, 106, 210, 0.12);
+      background: var(--primary-a04);
+      border: 1px solid var(--primary-a12);
       border-left: 3px solid var(--primary-color);
       margin-bottom: 12px;
       border-radius: var(--radius);
@@ -399,7 +427,7 @@
       left: 0;
       right: 0;
       height: 40px;
-      background: linear-gradient(transparent, rgba(94, 106, 210, 0.04));
+      background: linear-gradient(transparent, var(--primary-a04));
       pointer-events: none;
     }
     
@@ -422,7 +450,7 @@
       padding: 4px 8px;
       background-color: var(--primary-light);
       color: var(--primary-color);
-      border: 1px solid rgba(94, 106, 210, 0.15);
+      border: 1px solid var(--primary-a15);
       border-radius: var(--radius-sm);
       font-size: 12px;
       font-weight: 500;
@@ -431,8 +459,8 @@
     }
 
     .message-toggle:hover {
-      background-color: rgba(94, 106, 210, 0.12);
-      border-color: rgba(94, 106, 210, 0.25);
+      background-color: var(--primary-a12);
+      border-color: var(--primary-a25);
     }
     
     .message-toggle i {
@@ -513,7 +541,7 @@
     .sidebar-btn.active {
       background-color: var(--primary-color);
       color: white;
-      box-shadow: rgba(94, 106, 210, 0.25) 0px 1px 3px;
+      box-shadow: var(--primary-a25) 0px 1px 3px;
     }
     
     /* 主要内容区域 */
@@ -544,7 +572,7 @@
     }
     
     .date-grid button:focus {
-      outline: 2px solid #5e6ad2;
+      outline: 2px solid var(--primary-color);
       outline-offset: -2px;
     }
     
@@ -563,7 +591,7 @@
     /* 日期输入框焦点样式 */
     input[readonly]:focus {
       outline: none;
-      border-color: #5e6ad2;
+      border-color: var(--primary-color);
       box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
     }
     
@@ -1541,6 +1569,28 @@
               </div>
             </label>
           </div>
+        </div>
+      </div>
+
+      <!-- 外观：自定义主题色 -->
+      <div class="bg-white rounded-lg shadow-sm p-4 mb-3">
+        <h3 class="text-sm font-medium mb-1 flex items-center">
+          <i class="fas fa-palette mr-2 text-gray-500"></i><span data-i18n="appearanceSettings">外观</span>
+        </h3>
+        <p class="text-xs text-gray-500 mb-3" data-i18n="brandColorDesc">自定义界面主题色</p>
+
+        <div id="brand-color-presets" class="flex flex-wrap gap-2 mb-3"></div>
+
+        <div class="flex items-center gap-2">
+          <label class="brand-color-trigger" title="自定义颜色">
+            <input id="brand-color-input" type="color" value="#5E6AD2">
+          </label>
+          <input id="brand-color-hex" type="text" maxlength="7" spellcheck="false"
+            class="flex-1 text-sm font-mono uppercase border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 ring-brand"
+            placeholder="#5E6AD2">
+          <button id="brand-color-reset" type="button"
+            class="text-xs text-gray-500 hover:text-gray-700 px-3 py-2 rounded-lg hover:bg-gray-100 whitespace-nowrap"
+            data-i18n="resetDefault">恢复默认</button>
         </div>
       </div>
 

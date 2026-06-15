@@ -23,6 +23,15 @@
    "basicSettings": {
       "message": "基础设置"
    },
+   "appearanceSettings": {
+      "message": "Appearance"
+   },
+   "brandColorDesc": {
+      "message": "Customize the interface accent color"
+   },
+   "resetDefault": {
+      "message": "Reset"
+   },
    "calculating": {
       "message": "计算中..."
    },
