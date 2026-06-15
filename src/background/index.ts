@@ -323,6 +323,7 @@ function buildStartSimulcastRequest(params: RuntimeMessageParams): StartSimulcas
   return {
     tabId: params.tabId,
     streamId: getStringParam(params.streamId, '') || undefined,
+    audioSource: getStringParam(params.audioSource, 'tab') === 'mic' ? 'mic' : 'tab',
     sourceLanguage: getStringParam(params.sourceLanguage, 'auto'),
     targetLanguage: getStringParam(params.targetLanguage, 'zh-CN'),
     model: getStringParam(

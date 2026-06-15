@@ -9,6 +9,7 @@ interface SimulcastOffscreenStartMessage {
   session: {
     tabId: number;
     streamId: string;
+    audioSource?: 'tab' | 'mic';
     sourceLanguage: string;
     targetLanguage: string;
     model: string;
@@ -304,7 +305,9 @@ async function startCapture(message: SimulcastOffscreenStartMessage): Promise<{
 
   try {
     stream = await navigator.mediaDevices.getUserMedia(
-      createTabAudioConstraints(message.session.streamId)
+      message.session.audioSource === 'mic'
+        ? { audio: true, video: false }
+        : createTabAudioConstraints(message.session.streamId)
     );
     const AudioContextClass = window.AudioContext || window.webkitAudioContext;
     audioContext = new AudioContextClass();

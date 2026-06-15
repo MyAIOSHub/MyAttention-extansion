@@ -124,6 +124,9 @@ import {
   applyTranscribeSubtitle,
   resetTranscript,
   getTranscriptText,
+  buildTranscriptExport,
+  hasTranscript,
+  type TranscriptExportFormat,
 } from './transcribe-view';
 import { VOLCENGINE_AST_EVENTS } from '@/translation/volcengine-ast-protobuf';
 import { normalizeSimulcastPlaybackDelayMs } from '@/offscreen/simulcast-delay';
@@ -854,6 +857,8 @@ async function handleSimulcastStopClick(): Promise<void> {
 
 // 转写会话是否进行中（决定是否把源字幕路由到转写视图）
 let transcribeActive = false;
+// 转写音频来源：标签页音频 / 麦克风
+let transcribeSource: 'tab' | 'mic' = 'tab';
 
 function readSavedSettings(): Promise<AppSettings> {
   return new Promise((resolve) => {
@@ -883,8 +888,9 @@ async function handleTranscribeStartClick(): Promise<void> {
     // 校验凭据是否齐全（缺失会抛错）
     buildVolcengineAstHeaders(credentials);
 
+    const useMic = transcribeSource === 'mic';
     const [streamId, activeTab] = await Promise.all([
-      requestCurrentTabMediaStreamId(),
+      useMic ? Promise.resolve('') : requestCurrentTabMediaStreamId(),
       getActiveTab(),
     ]);
     if (typeof activeTab?.id !== 'number') {
@@ -896,6 +902,7 @@ async function handleTranscribeStartClick(): Promise<void> {
       type: 'simulcast:start',
       tabId: activeTab.id,
       streamId,
+      audioSource: transcribeSource,
       sourceLanguage: getControlValue('transcribe-source-language', 'auto'),
       targetLanguage: 'auto',
       model: si?.model ?? DEFAULT_SETTINGS.simultaneousInterpretation?.model ?? '',
@@ -948,6 +955,64 @@ async function handleTranscribeCopyClick(): Promise<void> {
     setTranscribeStatus('已复制全文', 'success');
   } catch {
     setTranscribeStatus('复制失败，请手动选择文本', 'error');
+  }
+}
+
+function handleTranscribeExport(format: TranscriptExportFormat): void {
+  if (!hasTranscript()) {
+    setTranscribeStatus('暂无可导出的转写内容', 'info');
+    return;
+  }
+  const mime = format === 'srt' ? 'application/x-subrip' : 'text/plain';
+  const blob = new Blob([buildTranscriptExport(format)], { type: `${mime};charset=utf-8` });
+  const url = URL.createObjectURL(blob);
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `transcript-${stamp}.${format}`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  setTranscribeStatus(`已导出 ${format.toUpperCase()}`, 'success');
+}
+
+async function handleTranscribeSaveClick(): Promise<void> {
+  const text = getTranscriptText();
+  if (!text) {
+    setTranscribeStatus('暂无可保存的转写内容', 'info');
+    return;
+  }
+  try {
+    const activeTab = await getActiveTab();
+    const url = activeTab?.url || '';
+    const pageTitle = activeTab?.title || '转写';
+    const domain = url ? new URL(url).hostname : 'transcribe';
+    const firstLine = text.split('\n')[0]?.slice(0, 60) ?? '转写';
+    const response = await safeSendRuntimeMessage<unknown, { snippet?: { id?: string } }>({
+      type: 'upsertSnippet',
+      snippet: {
+        dedupeKey: `transcript:${Date.now()}`,
+        type: 'page_save',
+        captureMethod: 'context_menu_page',
+        selectionText: `转写 · ${pageTitle}`.slice(0, 120),
+        contextText: text,
+        selectors: [],
+        url,
+        title: `转写 · ${pageTitle}`.slice(0, 120),
+        domain,
+        sourceKind: 'web_page',
+        headingPath: ['转写'],
+        rawContextMarkdown: buildTranscriptExport('md'),
+        summaryText: firstLine,
+      },
+    });
+    if (response.status === 'error') {
+      throw new Error(response.error || '保存失败');
+    }
+    setTranscribeStatus('已存为记录，可在「记录」查看 / 进「总结」', 'success');
+  } catch (error) {
+    setTranscribeStatus(getErrorMessage(error), 'error');
   }
 }
 
@@ -1008,6 +1073,23 @@ function initializeTranslationActions(): void {
   });
   document.getElementById('transcribe-copy-btn')?.addEventListener('click', () => {
     void handleTranscribeCopyClick();
+  });
+  document.getElementById('transcribe-export-txt')?.addEventListener('click', () => handleTranscribeExport('txt'));
+  document.getElementById('transcribe-export-srt')?.addEventListener('click', () => handleTranscribeExport('srt'));
+  document.getElementById('transcribe-export-md')?.addEventListener('click', () => handleTranscribeExport('md'));
+  document.getElementById('transcribe-save-btn')?.addEventListener('click', () => {
+    void handleTranscribeSaveClick();
+  });
+  document.querySelectorAll('.transcribe-source-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      if (transcribeActive) return; // 会话进行中不切换来源
+      const source = (btn as HTMLElement).dataset.source as 'tab' | 'mic' | undefined;
+      if (source !== 'tab' && source !== 'mic') return;
+      transcribeSource = source;
+      document.querySelectorAll('.transcribe-source-btn').forEach((b) => {
+        b.classList.toggle('active', (b as HTMLElement).dataset.source === source);
+      });
+    });
   });
 }
 

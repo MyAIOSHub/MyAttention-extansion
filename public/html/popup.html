@@ -1576,7 +1576,7 @@
           <button id="transcribe-source-tab" class="transcribe-source-btn active flex-1 px-3 py-1.5 text-xs rounded-md" data-source="tab">
             <i class="fas fa-display mr-1"></i>标签页音频
           </button>
-          <button type="button" class="transcribe-source-btn flex-1 px-3 py-1.5 text-xs rounded-md opacity-50 cursor-not-allowed" disabled title="即将上线">
+          <button id="transcribe-source-mic" type="button" class="transcribe-source-btn flex-1 px-3 py-1.5 text-xs rounded-md" data-source="mic">
             <i class="fas fa-microphone mr-1"></i>麦克风
           </button>
         </div>
@@ -1607,11 +1607,19 @@
       <div id="transcribe-status" class="text-xs text-gray-500 mb-2 hidden"></div>
 
       <!-- 操作 -->
-      <div class="flex items-center justify-between mb-2">
+      <div class="flex items-center justify-between mb-2 flex-wrap gap-1">
         <span class="text-xs text-gray-400" id="transcribe-meta">尚未开始</span>
-        <button id="transcribe-copy-btn" class="text-xs text-brand hover:bg-brand-light px-2 py-1 rounded transition-colors">
-          <i class="fas fa-copy mr-1"></i>复制全文
-        </button>
+        <div class="flex items-center gap-1">
+          <button id="transcribe-copy-btn" class="text-xs text-gray-600 hover:bg-gray-100 px-2 py-1 rounded transition-colors" title="复制全文">
+            <i class="fas fa-copy"></i>
+          </button>
+          <button id="transcribe-export-txt" class="text-xs text-gray-600 hover:bg-gray-100 px-2 py-1 rounded transition-colors" title="导出 txt">txt</button>
+          <button id="transcribe-export-srt" class="text-xs text-gray-600 hover:bg-gray-100 px-2 py-1 rounded transition-colors" title="导出 srt">srt</button>
+          <button id="transcribe-export-md" class="text-xs text-gray-600 hover:bg-gray-100 px-2 py-1 rounded transition-colors" title="导出 md">md</button>
+          <button id="transcribe-save-btn" class="text-xs text-brand hover:bg-brand-light px-2 py-1 rounded transition-colors" title="存为记录">
+            <i class="fas fa-bookmark mr-1"></i>存记录
+          </button>
+        </div>
       </div>
 
       <!-- 转写结果 -->

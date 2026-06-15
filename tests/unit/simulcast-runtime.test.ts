@@ -72,6 +72,7 @@ describe('SimulcastRuntime', () => {
       session: {
         tabId: 42,
         streamId: 'stream-id-1',
+        audioSource: 'tab',
         sourceLanguage: 'en',
         targetLanguage: 'zh-CN',
         model: 'Doubao_scene_SLM_Doubao_SI_model2000000748711437826',

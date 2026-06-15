@@ -15,9 +15,12 @@ interface TranscribeSubtitle {
 
 interface TranscribeSegment {
   startTime: number;
+  endTime: number;
   speakerLabel: string;
   text: string;
 }
+
+export type TranscriptExportFormat = 'txt' | 'srt' | 'md';
 
 const speakerLabels = new Map<string, string>();
 let committed: TranscribeSegment[] = [];
@@ -85,20 +88,26 @@ export function applyTranscribeSubtitle(subtitle: TranscribeSubtitle): void {
   const event = subtitle.event;
   const text = (subtitle.text ?? '').trim();
 
+  const start = subtitle.startTime ?? 0;
+  const end = subtitle.endTime ?? start;
+
   if (event === VOLCENGINE_AST_EVENTS.SourceSubtitleStart) {
-    live = { startTime: subtitle.startTime ?? 0, speakerLabel: labelForSpeaker(subtitle.speakerId), text };
+    live = { startTime: start, endTime: end, speakerLabel: labelForSpeaker(subtitle.speakerId), text };
   } else if (event === VOLCENGINE_AST_EVENTS.SourceSubtitleResponse) {
     if (!live) {
-      live = { startTime: subtitle.startTime ?? 0, speakerLabel: labelForSpeaker(subtitle.speakerId), text };
-    } else if (text) {
-      live.text = text;
+      live = { startTime: start, endTime: end, speakerLabel: labelForSpeaker(subtitle.speakerId), text };
+    } else {
+      live.endTime = end;
+      if (text) live.text = text;
     }
   } else if (event === VOLCENGINE_AST_EVENTS.SourceSubtitleEnd) {
     const seg = live ?? {
-      startTime: subtitle.startTime ?? 0,
+      startTime: start,
+      endTime: end,
       speakerLabel: labelForSpeaker(subtitle.speakerId),
       text,
     };
+    seg.endTime = end;
     if (text) seg.text = text;
     if (seg.text) committed.push(seg);
     live = null;
@@ -120,5 +129,40 @@ export function resetTranscript(): void {
 export function getTranscriptText(): string {
   return committed
     .map((seg) => `[${formatTime(seg.startTime)}] ${seg.speakerLabel}: ${seg.text}`)
+    .join('\n');
+}
+
+/** 是否已有可导出/保存的转写内容。 */
+export function hasTranscript(): boolean {
+  return committed.length > 0;
+}
+
+function srtTime(ms: number): string {
+  const total = Math.max(0, Math.floor(ms));
+  const h = Math.floor(total / 3600000);
+  const m = Math.floor((total % 3600000) / 60000);
+  const s = Math.floor((total % 60000) / 1000);
+  const millis = total % 1000;
+  const p = (n: number, w = 2): string => String(n).padStart(w, '0');
+  return `${p(h)}:${p(m)}:${p(s)},${p(millis, 3)}`;
+}
+
+/** 按格式构建导出文本。txt=纯文本 / srt=字幕 / md=Markdown。 */
+export function buildTranscriptExport(format: TranscriptExportFormat): string {
+  if (format === 'txt') {
+    return getTranscriptText();
+  }
+  if (format === 'md') {
+    const body = committed
+      .map((seg) => `**[${formatTime(seg.startTime)}] ${seg.speakerLabel}:** ${seg.text}`)
+      .join('\n\n');
+    return `# 转写\n\n${body}\n`;
+  }
+  // srt
+  return committed
+    .map((seg, i) => {
+      const end = seg.endTime > seg.startTime ? seg.endTime : seg.startTime + 2000;
+      return `${i + 1}\n${srtTime(seg.startTime)} --> ${srtTime(end)}\n${seg.speakerLabel}: ${seg.text}\n`;
+    })
     .join('\n');
 }

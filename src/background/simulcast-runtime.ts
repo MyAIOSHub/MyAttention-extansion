@@ -13,6 +13,8 @@ export const SIMULCAST_OFFSCREEN_DOCUMENT_PATH = 'html/simulcast_offscreen.html'
 export interface StartSimulcastRequest {
   tabId: number;
   streamId?: string;
+  /** 音频来源：tab=标签页音频（默认） / mic=麦克风 */
+  audioSource?: 'tab' | 'mic';
   sourceLanguage: string;
   targetLanguage: string;
   model: string;
@@ -64,13 +66,18 @@ export class SimulcastRuntime {
 
     try {
       await this.ensureOffscreenDocument();
-      const streamId = request.streamId || (await this.dependencies.getTabMediaStreamId(request.tabId));
+      // 麦克风来源无需 tab 媒体流 ID（offscreen 用 getUserMedia 采集）
+      const streamId =
+        request.audioSource === 'mic'
+          ? ''
+          : request.streamId || (await this.dependencies.getTabMediaStreamId(request.tabId));
 
       await this.sendOffscreenStartMessage({
         type: 'simulcast:offscreenStart',
         session: {
           tabId: request.tabId,
           streamId,
+          audioSource: request.audioSource ?? 'tab',
           sourceLanguage: request.sourceLanguage,
           targetLanguage: request.targetLanguage,
           model: request.model,
