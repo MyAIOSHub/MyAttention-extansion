@@ -6,6 +6,9 @@ import {
   getTranscriptText,
   buildTranscriptExport,
   hasTranscript,
+  setEditMode,
+  setSegmentText,
+  renameSpeaker,
 } from '../../src/popup/transcribe-view';
 
 function setupDom(): void {
@@ -81,6 +84,34 @@ describe('transcribe-view', () => {
     const html = document.getElementById('transcribe-segments')?.innerHTML ?? '';
     expect(html).toContain('data-start="5000"'); // committed → seekable
     expect(html).not.toContain('data-start="9000"'); // live row → not seekable
+  });
+
+  it('edits segment text via setSegmentText', () => {
+    applyTranscribeSubtitle({ event: VOLCENGINE_AST_EVENTS.SourceSubtitleEnd, text: 'orig', startTime: 0, speakerId: 's' });
+    setSegmentText(0, '  fixed text  ');
+    expect(getTranscriptText()).toBe('[00:00] S1: fixed text');
+  });
+
+  it('renames a speaker across all its segments', () => {
+    applyTranscribeSubtitle({ event: VOLCENGINE_AST_EVENTS.SourceSubtitleEnd, text: 'a', startTime: 0, speakerId: 'x' });
+    applyTranscribeSubtitle({ event: VOLCENGINE_AST_EVENTS.SourceSubtitleEnd, text: 'b', startTime: 1000, speakerId: 'y' });
+    applyTranscribeSubtitle({ event: VOLCENGINE_AST_EVENTS.SourceSubtitleEnd, text: 'c', startTime: 2000, speakerId: 'x' });
+    renameSpeaker('x', '王');
+    expect(getTranscriptText()).toBe('[00:00] 王: a\n[00:01] S2: b\n[00:02] 王: c');
+    // empty rename is ignored
+    renameSpeaker('y', '   ');
+    expect(getTranscriptText()).toContain('S2: b');
+  });
+
+  it('edit mode renders contenteditable rows with data-index / data-speaker-id', () => {
+    applyTranscribeSubtitle({ event: VOLCENGINE_AST_EVENTS.SourceSubtitleEnd, text: 'hello', startTime: 0, speakerId: 's' });
+    setEditMode(true);
+    const html = document.getElementById('transcribe-segments')?.innerHTML ?? '';
+    expect(html).toContain('contenteditable="true"');
+    expect(html).toContain('data-index="0"');
+    expect(html).toContain('data-speaker-id="s"');
+    expect(html).not.toContain('data-start='); // seek disabled in edit mode
+    setEditMode(false);
   });
 
   it('escapes HTML in transcript text', () => {

@@ -126,6 +126,10 @@ import {
   getTranscriptText,
   buildTranscriptExport,
   hasTranscript,
+  setEditMode,
+  isEditMode,
+  setSegmentText,
+  renameSpeaker,
   type TranscriptExportFormat,
 } from './transcribe-view';
 import { VOLCENGINE_AST_EVENTS } from '@/translation/volcengine-ast-protobuf';
@@ -997,12 +1001,35 @@ function setupTranscribePlayback(base64: string, mime: string): void {
 }
 
 function handleTranscribeSegmentSeek(event: Event): void {
+  if (isEditMode()) return; // 编辑模式下点击用于编辑，不跳转
   const row = (event.target as HTMLElement).closest<HTMLElement>('[data-start]');
   const startMs = row?.dataset.start ? Number(row.dataset.start) : NaN;
   const audio = document.getElementById('transcribe-audio') as HTMLAudioElement | null;
   if (!audio || !audio.src || Number.isNaN(startMs)) return;
   audio.currentTime = startMs / 1000;
   void audio.play().catch(() => undefined);
+}
+
+function handleTranscribeEditToggle(): void {
+  const next = !isEditMode();
+  setEditMode(next);
+  const btn = document.getElementById('transcribe-edit-btn');
+  if (btn) {
+    btn.classList.toggle('text-brand', next);
+    btn.classList.toggle('bg-brand-light', next);
+    btn.classList.toggle('text-gray-600', !next);
+    btn.setAttribute('title', next ? '完成编辑' : '编辑');
+  }
+  setTranscribeStatus(next ? '编辑中：改分段文本 / 点说话人改名' : '已退出编辑', 'info');
+}
+
+function handleTranscribeEditCommit(event: Event): void {
+  const el = event.target as HTMLElement;
+  if (el.dataset.index !== undefined) {
+    setSegmentText(Number(el.dataset.index), el.textContent ?? '');
+  } else if (el.dataset.speakerId !== undefined) {
+    renameSpeaker(el.dataset.speakerId, el.textContent ?? '');
+  }
 }
 
 function handleTranscribeExport(format: TranscriptExportFormat): void {
@@ -1128,6 +1155,9 @@ function initializeTranslationActions(): void {
     void handleTranscribeSaveClick();
   });
   document.getElementById('transcribe-segments')?.addEventListener('click', handleTranscribeSegmentSeek);
+  document.getElementById('transcribe-edit-btn')?.addEventListener('click', handleTranscribeEditToggle);
+  // contenteditable 失焦提交（blur 不冒泡，用 focusout 委托）
+  document.getElementById('transcribe-segments')?.addEventListener('focusout', handleTranscribeEditCommit);
   document.querySelectorAll('.transcribe-source-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
       if (transcribeActive) return; // 会话进行中不切换来源
