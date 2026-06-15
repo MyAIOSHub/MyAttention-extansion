@@ -6,6 +6,7 @@
  */
 
 import type { Conversation, SnippetGroup } from '@/types';
+import { fetchWithTimeout, FetchTimeoutError, normalizeErrorMessage } from '@/core/http';
 
 import { DEFAULT_MEMORY_HUB_BASE_URL } from './local-store-client';
 
@@ -82,31 +83,6 @@ export class EverMemOSClientError extends Error {
   }
 }
 
-function normalizeErrorMessage(error: unknown): string {
-  if (typeof error === 'string') {
-    return error;
-  }
-
-  if (error && typeof error === 'object') {
-    const message = (error as { message?: unknown }).message;
-    if (typeof message === 'string' && message.trim().length > 0) {
-      return message;
-    }
-
-    const detail = (error as { detail?: unknown }).detail;
-    if (typeof detail === 'string' && detail.trim().length > 0) {
-      return detail;
-    }
-
-    try {
-      return JSON.stringify(error);
-    } catch {
-      return String(error);
-    }
-  }
-
-  return String(error);
-}
 
 /**
  * Convert SaySo Conversation to EverMemOS import format
@@ -355,11 +331,6 @@ export class EverMemOSClient {
       timeoutMs?: number;
     }
   ): Promise<T> {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => {
-      controller.abort();
-    }, options.timeoutMs ?? REQUEST_TIMEOUT_MS);
-
     const headers: Record<string, string> = {
       Accept: 'application/json',
     };
@@ -369,12 +340,15 @@ export class EverMemOSClient {
     }
 
     try {
-      const response = await fetch(`${this.baseUrl}${path}`, {
-        method: options.method,
-        headers,
-        signal: controller.signal,
-        body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
-      });
+      const response = await fetchWithTimeout(
+        `${this.baseUrl}${path}`,
+        {
+          method: options.method,
+          headers,
+          body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+        },
+        options.timeoutMs ?? REQUEST_TIMEOUT_MS,
+      );
 
       const rawText = await response.text();
       const json = rawText ? (JSON.parse(rawText) as unknown) : ({} as unknown);
@@ -397,14 +371,12 @@ export class EverMemOSClient {
         throw error;
       }
 
-      if (error instanceof Error && error.name === 'AbortError') {
+      if (error instanceof FetchTimeoutError) {
         throw new EverMemOSClientError('Request timeout');
       }
 
-      const message = normalizeErrorMessage(error);
+      const message = normalizeErrorMessage(error, { includeDetail: true });
       throw new EverMemOSClientError(message || 'EverMemOS request failed');
-    } finally {
-      clearTimeout(timeout);
     }
   }
 }

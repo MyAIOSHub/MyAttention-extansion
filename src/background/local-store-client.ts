@@ -9,6 +9,7 @@ import type {
   SnippetSelectionUpsertResult,
   SnippetStatus,
 } from '@/types';
+import { fetchWithTimeout, normalizeErrorMessage } from '@/core/http';
 
 export const DEFAULT_MEMORY_HUB_BASE_URL = 'http://127.0.0.1:1995';
 export const DEFAULT_LOCAL_STORE_BASE_URL = `${DEFAULT_MEMORY_HUB_BASE_URL}/local-store`;
@@ -40,26 +41,6 @@ export class LocalStoreClientError extends Error {
   }
 }
 
-function normalizeErrorMessage(error: unknown): string {
-  if (typeof error === 'string') {
-    return error;
-  }
-
-  if (error && typeof error === 'object') {
-    const message = (error as { message?: unknown }).message;
-    if (typeof message === 'string' && message.trim().length > 0) {
-      return message;
-    }
-
-    try {
-      return JSON.stringify(error);
-    } catch {
-      return String(error);
-    }
-  }
-
-  return String(error);
-}
 
 export class LocalStoreClient {
   private baseUrl: string;
@@ -351,11 +332,6 @@ export class LocalStoreClient {
       timeoutMs?: number;
     }
   ): Promise<T> {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => {
-      controller.abort();
-    }, options.timeoutMs ?? REQUEST_TIMEOUT_MS);
-
     const headers: Record<string, string> = {
       Accept: 'application/json',
     };
@@ -365,12 +341,15 @@ export class LocalStoreClient {
     }
 
     try {
-      const response = await fetch(`${this.baseUrl}${path}`, {
-        method: options.method,
-        headers,
-        signal: controller.signal,
-        body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
-      });
+      const response = await fetchWithTimeout(
+        `${this.baseUrl}${path}`,
+        {
+          method: options.method,
+          headers,
+          body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+        },
+        options.timeoutMs ?? REQUEST_TIMEOUT_MS,
+      );
 
       const rawText = await response.text();
       const json = rawText ? (JSON.parse(rawText) as unknown) : ({} as unknown);
@@ -409,8 +388,6 @@ export class LocalStoreClient {
 
       const message = normalizeErrorMessage(error);
       throw new LocalStoreClientError(message || 'Local store request failed');
-    } finally {
-      clearTimeout(timeout);
     }
   }
 }

@@ -184,10 +184,16 @@ class ProtoReader {
       return;
     }
     if (wireType === 5) {
+      if (this.offset + 4 > this.bytes.length) {
+        throw new Error('Invalid protobuf length');
+      }
       this.offset += 4;
       return;
     }
     if (wireType === 1) {
+      if (this.offset + 8 > this.bytes.length) {
+        throw new Error('Invalid protobuf length');
+      }
       this.offset += 8;
       return;
     }

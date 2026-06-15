@@ -212,7 +212,15 @@ function sendRuntimeMessageToOffscreen(message: Record<string, unknown>): Promis
 function broadcastRuntimeNotification(message: Record<string, unknown>): Promise<void> {
   return new Promise((resolve) => {
     chrome.runtime.sendMessage(message, () => {
-      void getChromeLastErrorMessage();
+      // 广播投递：接收端不存在（如 popup 未打开）是正常情况，不当作失败拒绝；
+      // 但记录到 debug 以便区分预期的“无接收端”与真实投递错误。
+      const errorMessage = getChromeLastErrorMessage();
+      if (errorMessage) {
+        Logger.debug('[Background] 广播通知未送达', {
+          type: message.type,
+          error: errorMessage,
+        });
+      }
       resolve();
     });
   });

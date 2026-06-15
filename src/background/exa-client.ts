@@ -4,6 +4,7 @@
  */
 
 import { Logger } from '@/core/errors';
+import { fetchWithTimeout, FetchTimeoutError } from '@/core/http';
 
 export type ExaErrorCode =
   | 'INVALID_KEY'
@@ -71,29 +72,28 @@ export class ExaClient {
       body.contents = { text: { maxCharacters: 500 } };
     }
 
-    const controller = new AbortController();
     const timeoutMs = request.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-    const timer = globalThis.setTimeout(() => controller.abort(), timeoutMs);
 
     let response: Response;
     try {
-      response = await fetch(`${EXA_BASE}/search`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': this.apiKey,
+      response = await fetchWithTimeout(
+        `${EXA_BASE}/search`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': this.apiKey,
+          },
+          body: JSON.stringify(body),
         },
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      });
+        timeoutMs,
+      );
     } catch (error) {
-      const err = error as Error;
-      if (err.name === 'AbortError') {
+      if (error instanceof FetchTimeoutError) {
         throw new ExaClientError('TIMEOUT', `Exa request timed out after ${timeoutMs}ms`);
       }
+      const err = error as Error;
       throw new ExaClientError('NETWORK_ERROR', err.message || 'network error');
-    } finally {
-      clearTimeout(timer);
     }
 
     if (!response.ok) {
