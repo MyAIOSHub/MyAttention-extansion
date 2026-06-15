@@ -66,8 +66,11 @@ function render(): void {
   container.innerHTML = rows
     .map((seg, i) => {
       const isLive = live !== null && i === rows.length - 1;
+      // 已定稿分段可点击跳转回放（data-start 毫秒）；进行中的实时行不可点
+      const seekAttrs = isLive ? '' : ` data-start="${seg.startTime}"`;
+      const seekCls = isLive ? 'opacity-70' : 'cursor-pointer hover:bg-gray-50 rounded';
       return (
-        `<div class="flex gap-2 ${isLive ? 'opacity-70' : ''}">` +
+        `<div class="flex gap-2 ${seekCls}"${seekAttrs}>` +
         `<span class="text-xs text-gray-400 font-mono shrink-0 mt-0.5">${formatTime(seg.startTime)}</span>` +
         `<span class="text-xs font-semibold text-brand shrink-0 mt-0.5">${escapeHtml(seg.speakerLabel)}</span>` +
         `<span class="text-gray-800 leading-relaxed">${escapeHtml(seg.text)}</span>` +

@@ -10,6 +10,7 @@ interface SimulcastOffscreenStartMessage {
     tabId: number;
     streamId: string;
     audioSource?: 'tab' | 'mic';
+    recordAudio?: boolean;
     sourceLanguage: string;
     targetLanguage: string;
     model: string;
@@ -50,6 +51,56 @@ let activeAstSession: VolcengineAstSession | null = null;
 let ttsChunks: Uint8Array[] = [];
 let activeTranslatedAudio: HTMLAudioElement | null = null;
 let activeTranslatedAudioTimers: number[] = [];
+// 转写录音（仅 recordAudio 会话）
+let activeRecorder: MediaRecorder | null = null;
+let recordedChunks: Blob[] = [];
+let recordTabId: number | null = null;
+
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = (): void => {
+      const result = typeof reader.result === 'string' ? reader.result : '';
+      resolve(result.includes(',') ? result.slice(result.indexOf(',') + 1) : '');
+    };
+    reader.onerror = (): void => reject(reader.error ?? new Error('读取录音失败'));
+    reader.readAsDataURL(blob);
+  });
+}
+
+/** 停止录音并把音频（base64）下发给 popup 用于回放。 */
+function finalizeRecording(): void {
+  const recorder = activeRecorder;
+  const tabId = recordTabId;
+  activeRecorder = null;
+  recordTabId = null;
+  if (!recorder || recorder.state === 'inactive') {
+    recordedChunks = [];
+    return;
+  }
+  const mime = recorder.mimeType || 'audio/webm';
+  recorder.onstop = (): void => {
+    const chunks = recordedChunks;
+    recordedChunks = [];
+    if (chunks.length === 0) return;
+    void blobToBase64(new Blob(chunks, { type: mime }))
+      .then((base64) => {
+        if (!base64) return;
+        chrome.runtime.sendMessage({
+          type: 'simulcast:update',
+          target: 'background',
+          tabId,
+          audio: { base64, mime },
+        });
+      })
+      .catch(() => undefined);
+  };
+  try {
+    recorder.stop();
+  } catch {
+    recordedChunks = [];
+  }
+}
 
 function clearTranslatedAudioTimers(): void {
   activeTranslatedAudioTimers.forEach((timerId) => window.clearTimeout(timerId));
@@ -58,6 +109,8 @@ function clearTranslatedAudioTimers(): void {
 
 function stopActiveCapture(): void {
   clearTranslatedAudioTimers();
+  // 先收尾录音（在停轨前 stop，让 MediaRecorder 把缓冲刷出）
+  finalizeRecording();
   activeProcessor?.disconnect();
   activeProcessor = null;
 
@@ -309,6 +362,20 @@ async function startCapture(message: SimulcastOffscreenStartMessage): Promise<{
         ? { audio: true, video: false }
         : createTabAudioConstraints(message.session.streamId)
     );
+    if (message.session.recordAudio && stream) {
+      recordedChunks = [];
+      try {
+        const recorder = new MediaRecorder(stream);
+        recorder.ondataavailable = (event): void => {
+          if (event.data && event.data.size > 0) recordedChunks.push(event.data);
+        };
+        recorder.start(1000);
+        activeRecorder = recorder;
+        recordTabId = message.session.tabId;
+      } catch {
+        activeRecorder = null;
+      }
+    }
     const AudioContextClass = window.AudioContext || window.webkitAudioContext;
     audioContext = new AudioContextClass();
     source = audioContext.createMediaStreamSource(stream);

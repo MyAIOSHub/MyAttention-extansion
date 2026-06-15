@@ -266,6 +266,10 @@ interface SimulcastUpdateMessage {
     mutedDurationMs?: number;
     speakerId?: string;
   };
+  audio?: {
+    base64?: string;
+    mime?: string;
+  };
 }
 
 function getErrorMessage(error: unknown): string {
@@ -634,6 +638,12 @@ function handleSimulcastUpdate(
     return;
   }
 
+  if (message?.audio?.base64) {
+    setupTranscribePlayback(message.audio.base64, message.audio.mime || 'audio/webm');
+    sendResponse({ status: 'ok' });
+    return;
+  }
+
   const subtitle = message?.subtitle;
   const text = typeof subtitle?.text === 'string' ? subtitle.text.trim() : '';
   const statusMessage = message?.status?.message?.trim();
@@ -898,11 +908,13 @@ async function handleTranscribeStartClick(): Promise<void> {
     }
 
     resetTranscript();
+    clearTranscribePlayback();
     const response = await safeSendRuntimeMessage<unknown, { simulcast?: { state?: string } }>({
       type: 'simulcast:start',
       tabId: activeTab.id,
       streamId,
       audioSource: transcribeSource,
+      recordAudio: true,
       sourceLanguage: getControlValue('transcribe-source-language', 'auto'),
       targetLanguage: 'auto',
       model: si?.model ?? DEFAULT_SETTINGS.simultaneousInterpretation?.model ?? '',
@@ -956,6 +968,41 @@ async function handleTranscribeCopyClick(): Promise<void> {
   } catch {
     setTranscribeStatus('复制失败，请手动选择文本', 'error');
   }
+}
+
+let transcribePlaybackUrl: string | null = null;
+
+function clearTranscribePlayback(): void {
+  if (transcribePlaybackUrl) {
+    URL.revokeObjectURL(transcribePlaybackUrl);
+    transcribePlaybackUrl = null;
+  }
+  document.getElementById('transcribe-playback')?.classList.add('hidden');
+  const audio = document.getElementById('transcribe-audio') as HTMLAudioElement | null;
+  if (audio) audio.removeAttribute('src');
+}
+
+function setupTranscribePlayback(base64: string, mime: string): void {
+  try {
+    const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+    if (transcribePlaybackUrl) URL.revokeObjectURL(transcribePlaybackUrl);
+    transcribePlaybackUrl = URL.createObjectURL(new Blob([bytes], { type: mime }));
+    const audio = document.getElementById('transcribe-audio') as HTMLAudioElement | null;
+    if (audio) audio.src = transcribePlaybackUrl;
+    document.getElementById('transcribe-playback')?.classList.remove('hidden');
+    setTranscribeStatus('转写完成，可回放音频并点分段跳转', 'success');
+  } catch {
+    // 忽略无法解码的录音
+  }
+}
+
+function handleTranscribeSegmentSeek(event: Event): void {
+  const row = (event.target as HTMLElement).closest<HTMLElement>('[data-start]');
+  const startMs = row?.dataset.start ? Number(row.dataset.start) : NaN;
+  const audio = document.getElementById('transcribe-audio') as HTMLAudioElement | null;
+  if (!audio || !audio.src || Number.isNaN(startMs)) return;
+  audio.currentTime = startMs / 1000;
+  void audio.play().catch(() => undefined);
 }
 
 function handleTranscribeExport(format: TranscriptExportFormat): void {
@@ -1080,6 +1127,7 @@ function initializeTranslationActions(): void {
   document.getElementById('transcribe-save-btn')?.addEventListener('click', () => {
     void handleTranscribeSaveClick();
   });
+  document.getElementById('transcribe-segments')?.addEventListener('click', handleTranscribeSegmentSeek);
   document.querySelectorAll('.transcribe-source-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
       if (transcribeActive) return; // 会话进行中不切换来源

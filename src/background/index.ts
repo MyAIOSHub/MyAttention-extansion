@@ -324,6 +324,7 @@ function buildStartSimulcastRequest(params: RuntimeMessageParams): StartSimulcas
     tabId: params.tabId,
     streamId: getStringParam(params.streamId, '') || undefined,
     audioSource: getStringParam(params.audioSource, 'tab') === 'mic' ? 'mic' : 'tab',
+    recordAudio: params.recordAudio === true,
     sourceLanguage: getStringParam(params.sourceLanguage, 'auto'),
     targetLanguage: getStringParam(params.targetLanguage, 'zh-CN'),
     model: getStringParam(
@@ -727,6 +728,7 @@ const messageHandlersMap: Record<
       tabId: params.tabId,
       subtitle: params.subtitle,
       status: params.status,
+      audio: params.audio, // 转写录音回放（停止时一次性下发）
     });
     return { status: 'ok' };
   },

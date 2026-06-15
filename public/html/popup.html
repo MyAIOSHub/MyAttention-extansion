@@ -1622,6 +1622,15 @@
         </div>
       </div>
 
+      <!-- 回放条（转写完成后出现） -->
+      <div id="transcribe-playback" class="hidden mb-2 bg-white rounded-lg border border-gray-200 p-2">
+        <div class="flex items-center gap-2 mb-1">
+          <i class="fas fa-headphones text-xs text-gray-500"></i>
+          <span class="text-xs text-gray-500">录音回放 · 点分段跳转</span>
+        </div>
+        <audio id="transcribe-audio" controls class="w-full h-8"></audio>
+      </div>
+
       <!-- 转写结果 -->
       <div id="transcribe-segments" class="flex-1 min-h-0 overflow-y-auto bg-white rounded-lg border border-gray-200 p-3 space-y-2 text-sm">
         <div id="transcribe-empty" class="h-full flex flex-col items-center justify-center text-center text-gray-400">

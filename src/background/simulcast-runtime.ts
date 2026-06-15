@@ -15,6 +15,8 @@ export interface StartSimulcastRequest {
   streamId?: string;
   /** 音频来源：tab=标签页音频（默认） / mic=麦克风 */
   audioSource?: 'tab' | 'mic';
+  /** 是否录制捕获音频用于转写回放（默认 false；同传不用） */
+  recordAudio?: boolean;
   sourceLanguage: string;
   targetLanguage: string;
   model: string;
@@ -78,6 +80,7 @@ export class SimulcastRuntime {
           tabId: request.tabId,
           streamId,
           audioSource: request.audioSource ?? 'tab',
+          recordAudio: request.recordAudio ?? false,
           sourceLanguage: request.sourceLanguage,
           targetLanguage: request.targetLanguage,
           model: request.model,

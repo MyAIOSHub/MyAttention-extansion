@@ -75,6 +75,14 @@ describe('transcribe-view', () => {
     expect(srt).toContain('00:00:02,000 --> 00:00:04,000');
   });
 
+  it('marks committed segments seekable with data-start (ms)', () => {
+    applyTranscribeSubtitle({ event: VOLCENGINE_AST_EVENTS.SourceSubtitleEnd, text: 'done', startTime: 5000, speakerId: 's' });
+    applyTranscribeSubtitle({ event: VOLCENGINE_AST_EVENTS.SourceSubtitleStart, text: 'live…', startTime: 9000, speakerId: 's' });
+    const html = document.getElementById('transcribe-segments')?.innerHTML ?? '';
+    expect(html).toContain('data-start="5000"'); // committed → seekable
+    expect(html).not.toContain('data-start="9000"'); // live row → not seekable
+  });
+
   it('escapes HTML in transcript text', () => {
     applyTranscribeSubtitle({ event: VOLCENGINE_AST_EVENTS.SourceSubtitleEnd, text: '<b>x</b>', speakerId: 's' });
     const html = document.getElementById('transcribe-segments')?.innerHTML ?? '';
