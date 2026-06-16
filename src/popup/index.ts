@@ -850,7 +850,8 @@ async function handleSimulcastStartClick(): Promise<void> {
         DEFAULT_SETTINGS.simultaneousInterpretation?.model ??
           'Doubao_scene_SLM_Doubao_SI_model2000000748711437826'
       ),
-      audioOutputMode: getControlValue('simulcast-output-mode', 'translatedOnly'),
+      // 固定「原音混合」：原音/译音都播放，由下方音量滑块控制（不再暴露输出模式选择）
+      audioOutputMode: 'mixed',
       originalVolume: getNumberControlValue('simulcast-original-volume', 0.25),
       translatedVolume: getNumberControlValue('simulcast-translated-volume', 1),
       translatedAudioDelayMs: getDelayControlValue('simulcast-translated-delay-ms'),

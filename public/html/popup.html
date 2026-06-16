@@ -1515,15 +1515,15 @@
             <label class="block text-xs font-medium text-gray-600 mb-1">旧版 Secret Key</label>
             <input id="simulcast-secret-key" type="password" class="w-full text-sm border border-gray-200 rounded-lg px-2 py-2" placeholder="Secret Key">
           </div>
-          <div>
-            <label class="block text-xs font-medium text-gray-600 mb-1">输出模式</label>
-            <select id="simulcast-output-mode" class="w-full text-sm border border-gray-200 rounded-lg px-2 py-2 bg-white">
+          <!-- 输出模式已固定为「原音混合」，由下方音量滑块控制，故隐藏选择器 -->
+          <div class="hidden">
+            <select id="simulcast-output-mode">
               <option value="translatedOnly">仅译音</option>
-              <option value="mixed">原音混合</option>
+              <option value="mixed" selected>原音混合</option>
               <option value="subtitlesOnly">仅字幕</option>
             </select>
           </div>
-          <div>
+          <div class="col-span-2">
             <label class="block text-xs font-medium text-gray-600 mb-1">字幕模式</label>
             <select id="simulcast-subtitle-mode" class="w-full text-sm border border-gray-200 rounded-lg px-2 py-2 bg-white">
               <option value="bilingual">双语字幕</option>
