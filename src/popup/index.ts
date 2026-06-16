@@ -123,6 +123,7 @@ import { buildVolcengineAstHeaders } from '@/translation/volcengine-ast';
 import {
   applyTranscribeSubtitle,
   resetTranscript,
+  loadTranscript,
   getTranscriptText,
   buildTranscriptExport,
   hasTranscript,
@@ -132,6 +133,14 @@ import {
   renameSpeaker,
   type TranscriptExportFormat,
 } from './transcribe-view';
+import {
+  SAYSO_MODES,
+  transcribeViaSayso,
+  getSaysoBackendUrl,
+  setSaysoBackendUrl,
+  saysoModeLabel,
+  type SaysoMode,
+} from './sayso-transcribe';
 import { VOLCENGINE_AST_EVENTS } from '@/translation/volcengine-ast-protobuf';
 import { normalizeSimulcastPlaybackDelayMs } from '@/offscreen/simulcast-delay';
 import {
@@ -1093,17 +1102,87 @@ function maybeAutoMeasureSyncDelay(): void {
 let transcribeActive = false;
 // 转写音频来源：标签页 / 麦克风 / 文件 / 链接
 let transcribeSource: 'tab' | 'mic' | 'file' | 'url' = 'tab';
+// 文件/链接转写模式（走 Say-So-Scribe 后端）
+let transcribeMode: SaysoMode = 'whale';
+const TRANSCRIBE_MODE_KEY = 'transcribeMode';
+let saysoAbort: AbortController | null = null;
 
-function readFileAsBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = (): void => {
-      const result = typeof reader.result === 'string' ? reader.result : '';
-      resolve(result.includes(',') ? result.slice(result.indexOf(',') + 1) : '');
-    };
-    reader.onerror = (): void => reject(reader.error ?? new Error('读取文件失败'));
-    reader.readAsDataURL(file);
+/** 渲染 5 档模式卡 + 选中态。 */
+function renderTranscribeModeCards(): void {
+  const wrap = document.getElementById('transcribe-mode-cards');
+  if (!wrap) return;
+  wrap.innerHTML = SAYSO_MODES.map((m) => {
+    const active = m.key === transcribeMode;
+    const cls = active
+      ? 'border-brand bg-brand-light text-brand'
+      : 'border-gray-200 bg-white text-gray-700 hover:border-gray-300 hover:bg-gray-50';
+    return (
+      `<button type="button" data-mode="${m.key}" class="transcribe-mode-btn flex flex-col items-center gap-0.5 rounded-lg border-2 ${cls} py-2 px-1 text-center transition-colors">` +
+      `<span class="text-base leading-none">${m.icon}</span>` +
+      `<span class="text-xs font-semibold leading-tight">${m.name}</span>` +
+      `<span class="text-[10px] leading-tight opacity-70">${m.tier}</span>` +
+      `</button>`
+    );
+  }).join('');
+  wrap.querySelectorAll('.transcribe-mode-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      transcribeMode = (btn as HTMLElement).dataset.mode as SaysoMode;
+      void chrome.storage.local.set({ [TRANSCRIBE_MODE_KEY]: transcribeMode });
+      renderTranscribeModeCards();
+    });
   });
+}
+
+/** 文件/链接来源时显示模式卡。 */
+function updateTranscribeModeVisibility(): void {
+  const wrap = document.getElementById('transcribe-mode-wrap');
+  const isMedia = transcribeSource === 'file' || transcribeSource === 'url';
+  wrap?.classList.toggle('hidden', !isMedia);
+}
+
+/** 文件/链接转写：走 Say-So-Scribe 后端的所选模式。 */
+async function handleTranscribeViaSayso(): Promise<void> {
+  // 运行中再次点击 = 取消
+  if (transcribeActive && saysoAbort) {
+    saysoAbort.abort();
+    return;
+  }
+  try {
+    let file: File | null = null;
+    if (transcribeSource === 'file') {
+      file = (document.getElementById('transcribe-file') as HTMLInputElement | null)?.files?.[0] ?? null;
+      if (!file) throw new Error('请先选择音视频文件');
+    } else {
+      const url = (document.getElementById('transcribe-url') as HTMLInputElement | null)?.value.trim() || '';
+      if (!url) throw new Error('请先输入直链音视频 URL');
+      setTranscribeStatus('正在拉取链接...', 'info');
+      const blob = await (await fetch(url)).blob();
+      file = new File([blob], url.split('/').pop() || 'audio', { type: blob.type || 'audio/mpeg' });
+    }
+
+    resetTranscript();
+    transcribeActive = true;
+    updateTranscribeControls();
+    setTranscribeStatus(`正在用「${saysoModeLabel(transcribeMode)}」转写（Say-So-Scribe）…`, 'info');
+    const meta = document.getElementById('transcribe-meta');
+    if (meta) meta.textContent = '转写中…';
+
+    saysoAbort = new AbortController();
+    const lang = getControlValue('transcribe-source-language', 'auto');
+    const result = await transcribeViaSayso(file, transcribeMode, lang, saysoAbort.signal);
+    loadTranscript(result.segments, result.speakers);
+    setTranscribeStatus(`转写完成（${result.segments.length} 段 · ${saysoModeLabel(transcribeMode)}）`, 'success');
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      setTranscribeStatus('已取消转写', 'info');
+    } else {
+      setTranscribeStatus(getErrorMessage(error), 'error');
+    }
+  } finally {
+    transcribeActive = false;
+    saysoAbort = null;
+    updateTranscribeControls();
+  }
 }
 
 function readSavedSettings(): Promise<AppSettings> {
@@ -1142,6 +1221,11 @@ function updateTranscribeControls(): void {
 }
 
 async function handleTranscribeStartClick(): Promise<void> {
+  // 文件/链接 → Say-So-Scribe 后端（5 档模式）；标签页/麦克风 → 火山实时
+  if (transcribeSource === 'file' || transcribeSource === 'url') {
+    await handleTranscribeViaSayso();
+    return;
+  }
   try {
     setTranscribeStatus('正在准备转写会话...', 'info');
     const settings = await readSavedSettings();
@@ -1162,22 +1246,6 @@ async function handleTranscribeStartClick(): Promise<void> {
     // 校验凭据是否齐全（缺失会抛错）
     buildVolcengineAstHeaders(credentials);
 
-    let fileData: string | undefined;
-    let mediaMime: string | undefined;
-    let mediaUrl: string | undefined;
-    if (transcribeSource === 'file') {
-      const input = document.getElementById('transcribe-file') as HTMLInputElement | null;
-      const file = input?.files?.[0];
-      if (!file) throw new Error('请先选择音视频文件');
-      setTranscribeStatus('正在读取文件...', 'info');
-      fileData = await readFileAsBase64(file);
-      mediaMime = file.type || undefined;
-    } else if (transcribeSource === 'url') {
-      const urlInput = document.getElementById('transcribe-url') as HTMLInputElement | null;
-      mediaUrl = (urlInput?.value || '').trim();
-      if (!mediaUrl) throw new Error('请先输入直链音视频 URL');
-    }
-
     const isTab = transcribeSource === 'tab';
     const [streamId, activeTab] = await Promise.all([
       isTab ? requestCurrentTabMediaStreamId() : Promise.resolve(''),
@@ -1194,11 +1262,7 @@ async function handleTranscribeStartClick(): Promise<void> {
       tabId: activeTab.id,
       streamId,
       audioSource: transcribeSource,
-      fileData,
-      mediaUrl,
-      mediaMime,
-      // 文件/链接本身即音源，无需再录制
-      recordAudio: transcribeSource === 'tab' || transcribeSource === 'mic',
+      recordAudio: true, // 标签页/麦克风：录制以便回放
       sourceLanguage: getControlValue('transcribe-source-language', 'auto'),
       targetLanguage: 'auto',
       model: getControlValue(
@@ -1220,10 +1284,9 @@ async function handleTranscribeStartClick(): Promise<void> {
 
     transcribeActive = true;
     updateTranscribeControls();
-    const isMedia = transcribeSource === 'file' || transcribeSource === 'url';
-    setTranscribeStatus(isMedia ? '转写中：正在播放并识别（实时进度）…' : '转写进行中：正在捕获音频…', 'success');
+    setTranscribeStatus('转写进行中：正在捕获音频…', 'success');
     const meta = document.getElementById('transcribe-meta');
-    if (meta) meta.textContent = isMedia ? '转写中…' : '录制中…';
+    if (meta) meta.textContent = '录制中…';
   } catch (error) {
     transcribeActive = false;
     updateTranscribeControls();
@@ -1427,12 +1490,8 @@ function initializeTranslationActions(): void {
   });
 
   document.getElementById('transcribe-start-btn')?.addEventListener('click', () => {
-    // 文件/链接运行中 → 该按钮即「取消」
-    if ((transcribeSource === 'file' || transcribeSource === 'url') && transcribeActive) {
-      void handleTranscribeStopClick();
-    } else {
-      void handleTranscribeStartClick();
-    }
+    // 文件/链接：handleTranscribeViaSayso 内部自处理「取消(abort)」；标签页/麦克风：开始
+    void handleTranscribeStartClick();
   });
   document.getElementById('transcribe-stop-btn')?.addEventListener('click', () => {
     void handleTranscribeStopClick();
@@ -1462,9 +1521,28 @@ function initializeTranslationActions(): void {
       document.getElementById('transcribe-file')?.classList.toggle('hidden', source !== 'file');
       document.getElementById('transcribe-url')?.classList.toggle('hidden', source !== 'url');
       updateTranscribeControls();
+      updateTranscribeModeVisibility();
     });
   });
   updateTranscribeControls();
+
+  // 转写模式（Say-So-Scribe）：渲染卡片 + 载入持久化选择 + 后端地址
+  void (async () => {
+    const stored = await chrome.storage.local.get(TRANSCRIBE_MODE_KEY);
+    const m = stored?.[TRANSCRIBE_MODE_KEY];
+    if (SAYSO_MODES.some((x) => x.key === m)) {
+      transcribeMode = m as SaysoMode;
+    }
+    renderTranscribeModeCards();
+    updateTranscribeModeVisibility();
+    const urlInput = document.getElementById('transcribe-sayso-url') as HTMLInputElement | null;
+    if (urlInput) {
+      urlInput.value = await getSaysoBackendUrl();
+      urlInput.addEventListener('change', () => {
+        void setSaysoBackendUrl(urlInput.value);
+      });
+    }
+  })();
 }
 
 function renderRuntimeDiagnostics(viewModel: RuntimeDiagnosticsViewModel): void {

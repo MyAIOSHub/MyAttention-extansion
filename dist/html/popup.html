@@ -1629,6 +1629,12 @@
       <input id="transcribe-file" type="file" accept="audio/*,video/*" class="hidden w-full text-xs mb-2 file:mr-2 file:rounded file:border-0 file:bg-gray-100 file:px-2 file:py-1 file:text-xs flex-shrink-0">
       <input id="transcribe-url" type="url" placeholder="直链音视频 URL（mp3/mp4/wav/m4a）" class="hidden w-full text-sm border border-gray-200 rounded-lg px-2 py-2 mb-2 flex-shrink-0">
 
+      <!-- 转写模式（文件/链接走 Say-So-Scribe 后端，5 档） -->
+      <div id="transcribe-mode-wrap" class="hidden mb-2 flex-shrink-0">
+        <div class="text-xs font-medium text-gray-600 mb-1">模式（Say-So-Scribe）</div>
+        <div id="transcribe-mode-cards" class="grid grid-cols-3 gap-1.5"></div>
+      </div>
+
       <!-- 开始/停止 置顶 -->
       <div class="grid grid-cols-2 gap-2 mb-2 flex-shrink-0">
         <button id="transcribe-start-btn" class="py-2 text-xs font-medium btn-brand text-white rounded-lg hover:btn-brand transition-colors flex items-center justify-center gap-2">
@@ -1693,7 +1699,10 @@
             <option value="ja">日语</option>
             <option value="ko">韩语</option>
           </select>
-          <p class="text-xs text-gray-400 mt-2">凭据复用「同声传译」页配置的火山 AST Key。</p>
+          <p class="text-xs text-gray-400 mt-2">标签页/麦克风走火山实时（凭据复用「同声传译」页）。</p>
+          <label class="block text-xs font-medium text-gray-600 mb-1 mt-3">Say-So-Scribe 后端（文件/链接转写）</label>
+          <input id="transcribe-sayso-url" type="text" placeholder="http://localhost:3000" class="w-full text-sm border border-gray-200 rounded-lg px-2 py-2">
+          <p class="text-xs text-gray-400 mt-1">文件/链接用该后端的 5 档模式；需其服务已启动并配好 ASR。</p>
         </div>
       </details>
     </div>

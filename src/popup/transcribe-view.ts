@@ -130,6 +130,31 @@ export function applyTranscribeSubtitle(subtitle: TranscribeSubtitle): void {
   render();
 }
 
+/** 一次性载入已完成的转写（批处理结果，如 Say-So-Scribe 后端返回）。 */
+export function loadTranscript(
+  segments: { startSec: number; endSec: number; speakerId: string; text: string }[],
+  speakers: { id: string; name: string }[] = []
+): void {
+  committed = segments
+    .map((s) => ({
+      startTime: Math.round((s.startSec ?? 0) * 1000),
+      endTime: Math.round((s.endSec ?? s.startSec ?? 0) * 1000),
+      speakerId: normalizeSpeakerId(s.speakerId),
+      text: (s.text ?? '').trim(),
+    }))
+    .filter((s) => s.text);
+  live = null;
+  editMode = false;
+  speakerLabels.clear();
+  speakers.forEach((sp) => {
+    if (sp.id && sp.name) {
+      speakerLabels.set(normalizeSpeakerId(sp.id), sp.name);
+    }
+  });
+  committed.forEach((s) => labelForSpeaker(s.speakerId)); // 补齐未命名说话人标签
+  render();
+}
+
 /** 清空转写结果（开始新会话时调用）。 */
 export function resetTranscript(): void {
   committed = [];
