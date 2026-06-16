@@ -1141,23 +1141,23 @@ async function refreshContextMenus(): Promise<void> {
 
     await createContextMenu({
       id: CONTEXT_MENU_IDS.SELECTION,
-      title: '保存选中文本到 My Attention',
+      title: '保存选中文本到 SaySo Snip',
       contexts: ['selection'],
     });
     await createContextMenu({
       id: CONTEXT_MENU_IDS.PAGE,
-      title: '保存当前页面片段到 My Attention',
+      title: '保存当前页面片段到 SaySo Snip',
       contexts: ['page'],
     });
     await createContextMenu({
       id: CONTEXT_MENU_IDS.LINK,
-      title: '保存链接文本到 My Attention',
+      title: '保存链接文本到 SaySo Snip',
       contexts: ['link'],
     });
     if (webCapture.mediaEnabled !== false) {
       await createContextMenu({
         id: CONTEXT_MENU_IDS.MEDIA,
-        title: '保存媒体到 My Attention',
+        title: '保存媒体到 SaySo Snip',
         contexts: ['image', 'video', 'audio'],
       });
     }

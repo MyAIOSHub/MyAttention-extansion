@@ -22,7 +22,7 @@
   ],
   "commands": {
     "_execute_action": {
-      "description": "Open My Attention",
+      "description": "Open SaySo Snip",
       "suggested_key": {
         "default": "Ctrl+Shift+Y",
         "mac": "Command+Shift+Y"
