@@ -925,7 +925,7 @@ function setSimulcastSyncStatus(text: string): void {
 async function sendVideoSync(
   enabled: boolean,
   delaySec: number,
-  alignSourceSec?: number
+  options: { silent?: boolean } = {}
 ): Promise<void> {
   try {
     const resp = await sendMessageToActiveTab<{
@@ -936,7 +936,6 @@ async function sendVideoSync(
       type: 'simulcast:syncVideo',
       enabled,
       delaySec,
-      ...(typeof alignSourceSec === 'number' ? { alignSourceSec } : {}),
     });
     if (!enabled) {
       setSimulcastSyncStatus('');
@@ -945,13 +944,11 @@ async function sendVideoSync(
     const videoFound = resp?.videoFound ?? resp?.data?.videoFound;
     const mode = resp?.mode ?? resp?.data?.mode;
     const videoCount = resp?.videoCount ?? resp?.data?.videoCount;
-    // 对齐型调用不覆盖主状态（持续微调，避免刷屏）
-    if (typeof alignSourceSec === 'number') return;
     if (videoFound === false) {
       setSimulcastSyncStatus(
-        videoCount === 0 ? '页面没有视频元素' : '未找到主视频（在有视频的页面再试）'
+        videoCount === 0 ? '页面没有视频元素（无法对齐）' : '未找到主视频（在有视频的页面再试）'
       );
-    } else {
+    } else if (!options.silent) {
       setSimulcastSyncStatus(`已延迟视频 ${delaySec.toFixed(1)}s 对齐${mode === 'live' ? '（直播缓冲）' : ''}`);
     }
   } catch (error) {
@@ -960,18 +957,28 @@ async function sendVideoSync(
 }
 
 /**
- * 按译文字幕的源时间戳对齐视频（视频时钟，比 wall-clock 估算准）。
- * 字幕 startTime 即视频时间位置 → 持续把视频对到正在播报的内容（仅点播）。
+ * 实测翻译延迟并持续把视频延迟对到它。
+ * 延迟 L =（已过墙钟 − 字幕源时间戳）：字幕 startTime 是会话相对的源流位置，
+ * 实时捕获下 墙钟耗时−源位置 ≈ 译音相对画面的滞后。把视频回退 L 即对齐。
+ * 仅当 L 与当前延迟差 ≥0.5s 才重调，避免频繁 seek。
  */
 function maybeAutoMeasureSyncDelay(startTimeMs: number | undefined): void {
-  if (!simulcastRunning || !isSimulcastSyncOn()) return;
+  if (!simulcastRunning || !isSimulcastSyncOn() || simulcastStartWall === 0) return;
   const auto = (document.getElementById('simulcast-sync-auto') as HTMLInputElement | null)?.checked;
   if (!auto || typeof startTimeMs !== 'number') return;
-  void sendVideoSync(true, getSyncDelaySec(), startTimeMs / 1000);
-  if (!simulcastSyncMeasured) {
-    simulcastSyncMeasured = true;
-    setSimulcastSyncStatus('已按字幕时间对齐视频');
-  }
+  const elapsedSec = (Date.now() - simulcastStartWall) / 1000;
+  const sourceSec = startTimeMs / 1000;
+  // +0.3s TTS 余量；夹 0.5–8s，0.5s 步进
+  const latency = Math.min(8, Math.max(0.5, elapsedSec - sourceSec + 0.3));
+  const delaySec = Math.round(latency * 2) / 2;
+  if (Math.abs(delaySec - getSyncDelaySec()) < 0.5) return; // 变化不大不重调
+  const slider = document.getElementById('simulcast-sync-delay') as HTMLInputElement | null;
+  const val = document.getElementById('simulcast-sync-delay-val');
+  if (slider) slider.value = String(delaySec);
+  if (val) val.textContent = `${delaySec.toFixed(1)}s`;
+  void sendVideoSync(true, delaySec, { silent: true });
+  setSimulcastSyncStatus(`自动延迟 ${delaySec.toFixed(1)}s（实测对齐）`);
+  simulcastSyncMeasured = true;
 }
 
 // 转写会话是否进行中（决定是否把源字幕路由到转写视图）

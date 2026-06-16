@@ -7,7 +7,6 @@ import {
   disableVideoSync,
   reapplyVideoSync,
   isVideoSyncActive,
-  alignVideoToSource,
   countVideos,
 } from '../../src/content/simulcast-video-sync';
 
@@ -75,19 +74,6 @@ describe('simulcast-video-sync helpers', () => {
     it('returns null when no video at all', () => {
       expect(findMainVideo()).toBeNull();
       expect(countVideos()).toBe(0);
-    });
-  });
-
-  describe('alignVideoToSource', () => {
-    it('seeks the video to the source timestamp (minus lead) when drifted', () => {
-      const v = makeVideo({ w: 640, h: 360, duration: 600, currentTime: 100 });
-      enableVideoSync(3); // currentTime → 97
-      alignVideoToSource(50, 0.3); // drift large → seek to 49.7
-      expect(v.currentTime).toBeCloseTo(49.7, 5);
-    });
-    it('does nothing when not active', () => {
-      const r = alignVideoToSource(50);
-      expect(r.videoFound).toBe(false);
     });
   });
 

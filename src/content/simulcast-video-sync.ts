@@ -72,23 +72,6 @@ export function countVideos(): number {
   return document.querySelectorAll('video').length;
 }
 
-/**
- * 按译文字幕的源时间戳对齐视频（视频时钟，精度高于 wall-clock 估算）。
- * 字幕 startTime 即该视频的时间位置（同传抓的是此视频音频）。
- * 把视频 seek 到 该时间−缓冲，使画面对上正在播报的译音。
- */
-export function alignVideoToSource(sourceSec: number, leadSec = 0.3): VideoSyncResult {
-  if (!state || state.mode !== 'vod') {
-    return { videoFound: state !== null, mode: state?.mode ?? 'none', reason: '仅点播可按源时间对齐' };
-  }
-  const target = Math.max(0, sourceSec - Math.max(0, leadSec));
-  // 只在明显漂移时才 seek，避免频繁跳动
-  if (Math.abs(state.video.currentTime - target) > 0.4) {
-    state.video.currentTime = target;
-  }
-  return { videoFound: true, mode: 'vod' };
-}
-
 function applyDelay(video: HTMLVideoElement, delaySec: number): SyncMode {
   if (isLiveVideo(video)) {
     video.pause();
@@ -161,11 +144,6 @@ export function initSimulcastVideoSyncListener(): void {
     }
     try {
       if (message.enabled) {
-        // 按字幕源时间精确对齐（视频时钟）
-        if (typeof message.alignSourceSec === 'number' && isVideoSyncActive()) {
-          sendResponse({ status: 'ok', ...alignVideoToSource(message.alignSourceSec) });
-          return;
-        }
         const delaySec = typeof message.delaySec === 'number' ? message.delaySec : 3;
         const result = isVideoSyncActive()
           ? reapplyVideoSync(delaySec)
