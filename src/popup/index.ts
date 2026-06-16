@@ -684,6 +684,10 @@ function handleSimulcastUpdate(
 
   if (SIMULCAST_SOURCE_SUBTITLE_EVENTS.has(event)) {
     appendSimulcastSpeakerLog(subtitle, 'source', text);
+    // 记录首条源字幕墙钟时刻（估算「识别→翻译→译音」滞后）
+    if (simulcastRunning && simulcastFirstSourceWall === 0) {
+      simulcastFirstSourceWall = Date.now();
+    }
     // 转写会话进行中：源字幕同时累积进转写视图
     if (transcribeActive) {
       applyTranscribeSubtitle(subtitle);
@@ -692,8 +696,8 @@ function handleSimulcastUpdate(
 
   if (SIMULCAST_TRANSLATION_SUBTITLE_EVENTS.has(event)) {
     appendSimulcastSpeakerLog(subtitle, 'translation', text);
-    // 首条译文到达 → 自动估算延迟并重对齐视频
-    maybeAutoMeasureSyncDelay(subtitle.startTime);
+    // 首条译文到达 → 一次性按实测滞后对齐视频
+    maybeAutoMeasureSyncDelay();
   }
 
   if (!statusMessage) {
@@ -861,9 +865,9 @@ async function handleSimulcastStartClick(): Promise<void> {
     );
 
     // 音画同步：开局不盲目回退视频（会触发缓冲卡顿且白等），
-    // 待首条译文到达、实测真实延迟后再对齐（见 maybeAutoMeasureSyncDelay）。
+    // 待首条译文到达、实测真实延迟后一次性对齐（见 maybeAutoMeasureSyncDelay）。
     simulcastRunning = true;
-    simulcastStartWall = Date.now();
+    simulcastFirstSourceWall = 0;
     simulcastSyncMeasured = false;
   } catch (error) {
     setTranslationStatus('simulcast-status', getErrorMessage(error), 'error');
@@ -892,7 +896,7 @@ async function handleSimulcastStopClick(): Promise<void> {
 
 // 音画同步状态
 let simulcastRunning = false;
-let simulcastStartWall = 0;
+let simulcastFirstSourceWall = 0; // 首条源字幕的墙钟时刻（估算管线滞后用）
 let simulcastSyncMeasured = false;
 
 // 自动同传：开关持久化 + 触发去抖
@@ -940,12 +944,6 @@ async function queryActiveTabAndMaybeAutoStart(): Promise<void> {
   }
 }
 
-function getSyncDelaySec(): number {
-  const el = document.getElementById('simulcast-sync-delay') as HTMLInputElement | null;
-  const v = el ? Number(el.value) : 3;
-  return Number.isFinite(v) ? v : 3;
-}
-
 function setSimulcastSyncStatus(text: string): void {
   const el = document.getElementById('simulcast-sync-status');
   if (el) el.textContent = text;
@@ -986,29 +984,18 @@ async function sendVideoSync(
 }
 
 /**
- * 实测翻译延迟并持续把视频延迟对到它。
- * 延迟 L =（已过墙钟 − 字幕源时间戳）：字幕 startTime 是会话相对的源流位置，
- * 实时捕获下 墙钟耗时−源位置 ≈ 译音相对画面的滞后。把视频回退 L 即对齐。
- * 仅当 L 与当前延迟差 ≥0.5s 才重调，避免频繁 seek。
+ * 一次性对齐：用「首条源字幕 → 首条译文」的墙钟间隔估算管线滞后，把视频回退一次。
+ * 不用 subtitle.startTime（火山实时常返回 0/会话相对值，会让延迟无限增大→疯狂 seek/循环）。
+ * 只对齐一次，不持续重调，避免反复 seek 触发缓冲循环。
  */
-function maybeAutoMeasureSyncDelay(startTimeMs: number | undefined): void {
-  if (!simulcastRunning || simulcastStartWall === 0) return;
-  if (typeof startTimeMs !== 'number') return;
-  const elapsedSec = (Date.now() - simulcastStartWall) / 1000;
-  const sourceSec = startTimeMs / 1000;
-  // +0.3s TTS 余量；夹 0.5–8s，0.5s 步进
-  const latency = Math.min(8, Math.max(0.5, elapsedSec - sourceSec + 0.3));
-  const delaySec = Math.round(latency * 2) / 2;
-  // 首条译文：无条件按实测延迟对齐一次；之后变化 <0.5s 不重调，避免频繁 seek
-  if (simulcastSyncMeasured && Math.abs(delaySec - getSyncDelaySec()) < 0.5) return;
+function maybeAutoMeasureSyncDelay(): void {
+  if (!simulcastRunning || simulcastSyncMeasured) return;
+  if (simulcastFirstSourceWall === 0) return; // 还没收到源字幕，无从估算
+  const lagSec = (Date.now() - simulcastFirstSourceWall) / 1000;
+  const delaySec = Math.min(8, Math.max(1, Math.round(lagSec * 2) / 2));
   simulcastSyncMeasured = true;
-  const slider = document.getElementById('simulcast-sync-delay') as HTMLInputElement | null;
-  const val = document.getElementById('simulcast-sync-delay-val');
-  if (slider) slider.value = String(delaySec);
-  if (val) val.textContent = `${delaySec.toFixed(1)}s`;
   void sendVideoSync(true, delaySec, { silent: true });
-  setSimulcastSyncStatus(`自动延迟 ${delaySec.toFixed(1)}s（实测对齐）`);
-  simulcastSyncMeasured = true;
+  setSimulcastSyncStatus(`自动延迟 ${delaySec.toFixed(1)}s（实测对齐，一次性）`);
 }
 
 // 转写会话是否进行中（决定是否把源字幕路由到转写视图）

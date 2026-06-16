@@ -23,7 +23,6 @@ interface SyncState {
   video: HTMLVideoElement;
   delaySec: number;
   mode: SyncMode;
-  cleanup: () => void;
 }
 
 let state: SyncState | null = null;
@@ -87,7 +86,11 @@ function applyDelay(video: HTMLVideoElement, delaySec: number): SyncMode {
   return 'vod';
 }
 
-/** 开启音画同步：延迟主视频（不静音，见文件头注释）。重复调用先还原再应用。 */
+/**
+ * 开启音画同步：把主视频一次性回退 delaySec（不静音，见文件头注释）。
+ * 不挂 loadeddata watchdog——大幅 seek 会触发 YouTube 缓冲并再发 loadeddata，
+ * 若在回调里再次回退就会无限向后循环。故仅做一次性对齐。
+ */
 export function enableVideoSync(delaySec: number): VideoSyncResult {
   disableVideoSync();
   const video = findMainVideo();
@@ -95,20 +98,7 @@ export function enableVideoSync(delaySec: number): VideoSyncResult {
     return { videoFound: false, mode: 'none', reason: '未找到主视频' };
   }
   const mode = applyDelay(video, delaySec);
-
-  // watchdog：换源/重新播放后重对齐（VOD）
-  const onPlay = (): void => {
-    if (state && state.mode === 'vod') {
-      video.currentTime = computeSeekTarget(video.currentTime, state.delaySec);
-    }
-  };
-  video.addEventListener('loadeddata', onPlay);
-  state = {
-    video,
-    delaySec,
-    mode,
-    cleanup: () => video.removeEventListener('loadeddata', onPlay),
-  };
+  state = { video, delaySec, mode };
   return { videoFound: true, mode };
 }
 
@@ -123,10 +113,8 @@ export function reapplyVideoSync(delaySec: number): VideoSyncResult {
   return enableVideoSync(delaySec);
 }
 
-/** 关闭音画同步：清理监听（不前进视频，保留当前位置）。 */
+/** 关闭音画同步：保留当前播放位置（不前进视频）。 */
 export function disableVideoSync(): void {
-  if (!state) return;
-  state.cleanup();
   state = null;
 }
 
