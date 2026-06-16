@@ -27,6 +27,6 @@ describe('translation popup shell', () => {
     expect(popupHtml).toContain('id="simulcast-access-token"');
     expect(popupHtml).toContain('id="simulcast-secret-key"');
     expect(popupHtml).toContain('id="simulcast-translated-delay-ms"');
-    expect(popupHtml).toContain('id="simulcast-speaker-log"');
+    expect(popupHtml).toContain('id="simulcast-paired"');
   });
 });

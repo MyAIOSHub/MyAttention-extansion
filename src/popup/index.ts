@@ -557,15 +557,14 @@ function setTranslationStatus(
   element.classList.remove('hidden');
 }
 
-function getSimulcastChannelLabel(channel: SimulcastSubtitleChannel): string {
-  return channel === 'source' ? '原文' : '译文';
-}
-
 /**
- * 原文/译文按句配对、带说话人前缀渲染：
- *   说话人N: 原文
- *   说话人N: 译文
- * 源/译文按出现顺序 1:1 配对；说话人编号取自 speakerId（无 ID 则同为说话人1）。
+ * 原文/译文/说话人日志合并为一个「按说话人分段」的流式视图：
+ *   说话人N · 00:12
+ *   原文…
+ *   译文…
+ * 源/译文按出现顺序 1:1 配对；每个源片段（reducer 已按 spk_chg 切分）即一次说话人轮次。
+ * 火山实时 AST 仅提供 spk_chg（说话人切换），无稳定说话人 ID：
+ *   有真·ID 时按 ID 去重编号；否则按轮次顺序编号。
  */
 function renderSimulcastPaired(): void {
   const el = document.getElementById('simulcast-paired');
@@ -577,19 +576,22 @@ function renderSimulcastPaired(): void {
     return;
   }
 
-  const speakerNumbers = new Map<string, string>();
-  const speakerLabel = (speakerId?: string): string => {
-    const id = speakerId && speakerId.trim().length > 0 ? speakerId : '__unknown__';
-    let label = speakerNumbers.get(id);
-    if (!label) {
-      label = `说话人${speakerNumbers.size + 1}`;
-      speakerNumbers.set(id, label);
+  const hasRealIds = sources.some((s) => Boolean(s.speakerId && s.speakerId.trim().length > 0));
+  const idNumbers = new Map<string, number>();
+  const speakerNoFor = (src: SimulcastSpeakerSegment, turnIndex: number): number => {
+    if (!hasRealIds) return turnIndex + 1;
+    const id = src.speakerId && src.speakerId.trim().length > 0 ? src.speakerId : '__unknown__';
+    let n = idNumbers.get(id);
+    if (n === undefined) {
+      n = idNumbers.size + 1;
+      idNumbers.set(id, n);
     }
-    return label;
+    return n;
   };
 
   const turns = sources.map((src, i) => ({
-    speaker: speakerLabel(src.speakerId),
+    no: speakerNoFor(src, i),
+    time: formatSimulcastTimestamp(src.startTime),
     source: src.text,
     translation: translations[i]?.text ?? '',
   }));
@@ -597,49 +599,15 @@ function renderSimulcastPaired(): void {
   el.innerHTML = turns
     .slice(-40)
     .map((t) => {
-      const spk = escapeHtml(t.speaker);
-      const srcLine = `<div class="flex gap-1"><span class="text-xs font-semibold text-brand shrink-0 whitespace-nowrap mt-0.5">${spk}:</span><span class="text-gray-800 text-sm leading-relaxed">${escapeHtml(t.source)}</span></div>`;
+      const head = `<div class="flex items-center gap-2 mb-0.5"><span class="text-xs font-semibold text-brand">说话人${t.no}</span><span class="text-[10px] text-gray-400">${t.time}</span></div>`;
+      const srcLine = `<div class="text-gray-800 text-sm leading-relaxed">${escapeHtml(t.source)}</div>`;
       const trLine = t.translation
-        ? `<div class="flex gap-1"><span class="text-xs font-semibold text-brand/70 shrink-0 whitespace-nowrap mt-0.5">${spk}:</span><span class="text-gray-600 text-sm leading-relaxed">${escapeHtml(t.translation)}</span></div>`
+        ? `<div class="text-gray-500 text-sm leading-relaxed">${escapeHtml(t.translation)}</div>`
         : '';
-      return `<div>${srcLine}${trLine}</div>`;
+      return `<div class="border-b border-gray-50 pb-2">${head}${srcLine}${trLine}</div>`;
     })
     .join('');
   el.scrollTop = el.scrollHeight;
-}
-
-function renderSimulcastSpeakerLog(): void {
-  const container = document.getElementById('simulcast-speaker-log');
-  if (!container) {
-    return;
-  }
-
-  if (!simulcastSpeakerSegments.length) {
-    container.innerHTML = '<div class="text-gray-400">等待流式说话人日志...</div>';
-    return;
-  }
-
-  container.innerHTML = simulcastSpeakerSegments
-    .slice(-80)
-    .map((segment) => {
-      const channelClass =
-        segment.channel === 'source'
-          ? 'bg-blue-50 text-blue-700 border-blue-100'
-          : 'bg-green-50 text-green-700 border-green-100';
-      return `
-        <div class="border border-gray-100 rounded-lg p-2 bg-white">
-          <div class="flex items-center justify-between gap-2 mb-1">
-            <div class="flex items-center gap-2 min-w-0">
-              <span class="text-xs font-medium text-gray-700">${escapeHtml(segment.speakerLabel)}</span>
-              <span class="text-xs px-1 py-0.5 rounded border ${channelClass}">${getSimulcastChannelLabel(segment.channel)}</span>
-            </div>
-            <span class="text-xs text-gray-400 flex-shrink-0">${formatSimulcastTimestamp(segment.startTime)}-${formatSimulcastTimestamp(segment.endTime)}</span>
-          </div>
-          <div class="text-xs text-gray-700 leading-relaxed whitespace-pre-wrap">${escapeHtml(segment.text)}</div>
-        </div>
-      `;
-    })
-    .join('');
 }
 
 function appendSimulcastSpeakerLog(
@@ -660,13 +628,11 @@ function appendSimulcastSpeakerLog(
     simulcastSpeakerSegments = simulcastSpeakerSegments.slice(-80);
   }
   renderSimulcastPaired();
-  renderSimulcastSpeakerLog();
 }
 
 function clearSimulcastStreamingOutput(): void {
   simulcastSpeakerSegments = [];
   renderSimulcastPaired();
-  renderSimulcastSpeakerLog();
 }
 
 function handleSimulcastUpdate(
