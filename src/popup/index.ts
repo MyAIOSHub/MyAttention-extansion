@@ -561,23 +561,49 @@ function getSimulcastChannelLabel(channel: SimulcastSubtitleChannel): string {
   return channel === 'source' ? '原文' : '译文';
 }
 
-/** 把某通道(原文/译文)按说话人分段渲染到对应容器。 */
-function renderSimulcastChannel(elementId: string, channel: SimulcastSubtitleChannel): void {
-  const el = document.getElementById(elementId);
+/**
+ * 原文/译文按句配对、带说话人前缀渲染：
+ *   说话人N: 原文
+ *   说话人N: 译文
+ * 源/译文按出现顺序 1:1 配对；说话人编号取自 speakerId（无 ID 则同为说话人1）。
+ */
+function renderSimulcastPaired(): void {
+  const el = document.getElementById('simulcast-paired');
   if (!el) return;
-  const segs = simulcastSpeakerSegments.filter((s) => s.channel === channel).slice(-60);
-  if (!segs.length) {
+  const sources = simulcastSpeakerSegments.filter((s) => s.channel === 'source');
+  const translations = simulcastSpeakerSegments.filter((s) => s.channel === 'translation');
+  if (!sources.length && !translations.length) {
     el.innerHTML = '<div class="text-gray-400 text-xs">等待…</div>';
     return;
   }
-  el.innerHTML = segs
-    .map(
-      (s) =>
-        `<div class="flex gap-2">` +
-        `<span class="text-xs font-semibold text-brand shrink-0 mt-0.5">${escapeHtml(s.speakerLabel)}</span>` +
-        `<span class="text-gray-800 text-sm leading-relaxed">${escapeHtml(s.text)}</span>` +
-        `</div>`
-    )
+
+  const speakerNumbers = new Map<string, string>();
+  const speakerLabel = (speakerId?: string): string => {
+    const id = speakerId && speakerId.trim().length > 0 ? speakerId : '__unknown__';
+    let label = speakerNumbers.get(id);
+    if (!label) {
+      label = `说话人${speakerNumbers.size + 1}`;
+      speakerNumbers.set(id, label);
+    }
+    return label;
+  };
+
+  const turns = sources.map((src, i) => ({
+    speaker: speakerLabel(src.speakerId),
+    source: src.text,
+    translation: translations[i]?.text ?? '',
+  }));
+
+  el.innerHTML = turns
+    .slice(-40)
+    .map((t) => {
+      const spk = escapeHtml(t.speaker);
+      const srcLine = `<div class="flex gap-1"><span class="text-xs font-semibold text-brand shrink-0 whitespace-nowrap mt-0.5">${spk}:</span><span class="text-gray-800 text-sm leading-relaxed">${escapeHtml(t.source)}</span></div>`;
+      const trLine = t.translation
+        ? `<div class="flex gap-1"><span class="text-xs font-semibold text-brand/70 shrink-0 whitespace-nowrap mt-0.5">${spk}:</span><span class="text-gray-600 text-sm leading-relaxed">${escapeHtml(t.translation)}</span></div>`
+        : '';
+      return `<div>${srcLine}${trLine}</div>`;
+    })
     .join('');
   el.scrollTop = el.scrollHeight;
 }
@@ -633,15 +659,13 @@ function appendSimulcastSpeakerLog(
   if (simulcastSpeakerSegments.length > 120) {
     simulcastSpeakerSegments = simulcastSpeakerSegments.slice(-80);
   }
-  renderSimulcastChannel('simulcast-original-text', 'source');
-  renderSimulcastChannel('simulcast-translated-text', 'translation');
+  renderSimulcastPaired();
   renderSimulcastSpeakerLog();
 }
 
 function clearSimulcastStreamingOutput(): void {
   simulcastSpeakerSegments = [];
-  renderSimulcastChannel('simulcast-original-text', 'source');
-  renderSimulcastChannel('simulcast-translated-text', 'translation');
+  renderSimulcastPaired();
   renderSimulcastSpeakerLog();
 }
 
