@@ -21,6 +21,7 @@ import {
 } from '@/content/common';
 import { isCapturablePage } from '@/core/page-scope';
 import { initSimulcastVideoSyncListener } from '@/content/simulcast-video-sync';
+import { initSimulcastSubtitleOverlayListener } from '@/content/simulcast-subtitle-overlay';
 import {
   initFloatTag,
   updateFloatTagState,
@@ -1149,6 +1150,8 @@ async function init(): Promise<void> {
       initSelectionTranslationToolbar();
       // 同声传译音画同步（延迟主视频对齐译音）
       initSimulcastVideoSyncListener();
+      // 同声传译视频上字幕叠加
+      initSimulcastSubtitleOverlayListener();
     }
 
     reportRuntimeStatus({

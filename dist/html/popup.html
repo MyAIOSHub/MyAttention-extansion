@@ -1474,122 +1474,128 @@
         <p class="text-xs text-gray-500">捕获网页音频，调用同传 API 并克隆音色输出</p>
       </div>
 
-      <div class="bg-white rounded-lg shadow-sm border border-gray-100 p-3 mb-3">
-        <div class="grid grid-cols-2 gap-2 mb-3">
-          <div>
-            <label class="block text-xs font-medium text-gray-600 mb-1">原音语言</label>
-            <select id="simulcast-source-language" class="w-full text-sm border border-gray-200 rounded-lg px-2 py-2 bg-white">
-              <option value="auto">自动检测</option>
-              <option value="zh-CN">中文</option>
-              <option value="en">英语</option>
-              <option value="ja">日语</option>
-              <option value="ko">韩语</option>
-            </select>
-          </div>
-          <div>
-            <label class="block text-xs font-medium text-gray-600 mb-1">目标语言</label>
-            <select id="simulcast-target-language" class="w-full text-sm border border-gray-200 rounded-lg px-2 py-2 bg-white">
-              <option value="zh-CN">中文</option>
-              <option value="en">英语</option>
-              <option value="ja">日语</option>
-              <option value="ko">韩语</option>
-            </select>
-          </div>
-          <div class="col-span-2">
-            <label class="block text-xs font-medium text-gray-600 mb-1">火山模型</label>
-            <input id="simulcast-model" type="text" class="w-full text-sm border border-gray-200 rounded-lg px-2 py-2" value="Doubao_scene_SLM_Doubao_SI_model2000000748711437826">
-          </div>
-          <div class="col-span-2">
-            <label class="block text-xs font-medium text-gray-600 mb-1">新版 API Key</label>
-            <input id="simulcast-api-key" type="password" class="w-full text-sm border border-gray-200 rounded-lg px-2 py-2" placeholder="推荐使用新版控制台 API Key">
-          </div>
-          <div>
-            <label class="block text-xs font-medium text-gray-600 mb-1">旧版 App ID</label>
-            <input id="simulcast-app-id" type="text" class="w-full text-sm border border-gray-200 rounded-lg px-2 py-2" placeholder="App ID">
-          </div>
-          <div>
-            <label class="block text-xs font-medium text-gray-600 mb-1">旧版 Access Token</label>
-            <input id="simulcast-access-token" type="password" class="w-full text-sm border border-gray-200 rounded-lg px-2 py-2" placeholder="Access Token">
-          </div>
-          <div class="col-span-2">
-            <label class="block text-xs font-medium text-gray-600 mb-1">旧版 Secret Key</label>
-            <input id="simulcast-secret-key" type="password" class="w-full text-sm border border-gray-200 rounded-lg px-2 py-2" placeholder="Secret Key">
-          </div>
-          <!-- 输出模式已固定为「原音混合」，由下方音量滑块控制，故隐藏选择器 -->
-          <div class="hidden">
-            <select id="simulcast-output-mode">
-              <option value="translatedOnly">仅译音</option>
-              <option value="mixed" selected>原音混合</option>
-              <option value="subtitlesOnly">仅字幕</option>
-            </select>
-          </div>
-          <div class="col-span-2">
-            <label class="block text-xs font-medium text-gray-600 mb-1">字幕模式</label>
-            <select id="simulcast-subtitle-mode" class="w-full text-sm border border-gray-200 rounded-lg px-2 py-2 bg-white">
-              <option value="bilingual">双语字幕</option>
-              <option value="translationOnly">仅译文</option>
-              <option value="off">关闭字幕</option>
-            </select>
-          </div>
-        </div>
-
-        <div class="space-y-2 mb-3">
-          <label class="block text-xs font-medium text-gray-600">原音音量</label>
-          <input id="simulcast-original-volume" type="range" min="0" max="1" step="0.05" value="0.25" class="w-full">
-          <label class="block text-xs font-medium text-gray-600">译音音量</label>
-          <input id="simulcast-translated-volume" type="range" min="0" max="1" step="0.05" value="1" class="w-full">
-          <div>
-            <div class="flex items-center justify-between mb-1">
-              <label class="block text-xs font-medium text-gray-600">译音延迟</label>
-              <span class="text-xs text-gray-400">0-5000 ms</span>
-            </div>
-            <input id="simulcast-translated-delay-ms" type="number" min="0" max="5000" step="100" value="0" class="w-full text-sm border border-gray-200 rounded-lg px-2 py-2" placeholder="0">
-          </div>
-        </div>
-
-        <label class="flex items-center justify-between bg-gray-50 border border-gray-100 rounded-lg px-3 py-2 text-sm mb-2">
-          <span class="text-gray-700">克隆原视频音色</span>
-          <input id="simulcast-voice-clone-toggle" type="checkbox" class="w-4 h-4" checked>
-        </label>
-
-        <label class="flex items-center justify-between bg-gray-50 border border-gray-100 rounded-lg px-3 py-2 text-sm mb-3">
-          <span class="text-gray-700">自动同传<span class="text-gray-400">（打开扩展后，视频播放即自动开始）</span></span>
-          <input id="simulcast-auto-toggle" type="checkbox" class="w-4 h-4">
-        </label>
-
-        <div class="grid grid-cols-2 gap-2">
-          <button id="simulcast-start-btn" class="py-2 text-xs font-medium btn-brand text-white rounded-lg hover:btn-brand transition-colors flex items-center justify-center gap-2">
-            <i class="fas fa-play"></i>
-            <span>开始同传</span>
-          </button>
-          <button id="simulcast-stop-btn" class="py-2 text-xs font-medium bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors flex items-center justify-center gap-2">
-            <i class="fas fa-stop"></i>
-            <span>停止</span>
-          </button>
-        </div>
+      <!-- 开始/停止：置顶 -->
+      <div class="grid grid-cols-2 gap-2 mb-2">
+        <button id="simulcast-start-btn" class="py-2 text-xs font-medium btn-brand text-white rounded-lg hover:btn-brand transition-colors flex items-center justify-center gap-2">
+          <i class="fas fa-play"></i>
+          <span>开始同传</span>
+        </button>
+        <button id="simulcast-stop-btn" class="py-2 text-xs font-medium bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors flex items-center justify-center gap-2">
+          <i class="fas fa-stop"></i>
+          <span>停止</span>
+        </button>
       </div>
 
-      <!-- 音画同步：默认开启、自动估算延迟（无需用户操作） -->
-      <div class="bg-white border border-gray-100 rounded-lg p-3 mb-2">
-        <div class="flex items-center gap-2">
-          <i class="fas fa-wand-magic-sparkles text-xs text-brand"></i>
-          <span class="text-sm font-medium text-gray-700">音画同步（自动）</span>
-        </div>
-        <div id="simulcast-sync-status" class="text-xs text-gray-400 mt-1">开始同传后自动延迟视频、对齐译音</div>
+      <!-- 音画同步状态（自动） -->
+      <div class="flex items-center gap-2 mb-2 text-xs">
+        <i class="fas fa-wand-magic-sparkles text-brand"></i>
+        <span class="text-gray-600">音画同步（自动）</span>
+        <span id="simulcast-sync-status" class="text-gray-400 truncate">待开始</span>
       </div>
 
       <div id="simulcast-status" class="hidden text-xs text-gray-600 bg-gray-50 border border-gray-100 rounded-lg px-3 py-2 mb-2"></div>
-      <div class="grid gap-2 text-xs">
-        <div class="bg-white border border-gray-100 rounded-lg p-3">
-          <div class="flex items-center justify-between mb-2">
-            <div class="text-gray-500">原文 / 译文（按说话人分段）</div>
-            <div class="text-gray-400">流式</div>
-          </div>
-          <div id="simulcast-paired" class="space-y-3 max-h-96 overflow-y-auto">
-            <div class="text-gray-400 text-xs">等待…</div>
-          </div>
+
+      <!-- 原文 / 译文：置顶展示 -->
+      <div class="bg-white border border-gray-100 rounded-lg p-3 mb-3">
+        <div class="flex items-center justify-between mb-2">
+          <div class="text-xs text-gray-500">原文 / 译文（按说话人分段）</div>
+          <div class="text-xs text-gray-400">流式</div>
+        </div>
+        <div id="simulcast-paired" class="space-y-3 max-h-96 overflow-y-auto text-xs">
+          <div class="text-gray-400 text-xs">等待…</div>
         </div>
       </div>
+
+      <!-- 设置（默认收起：语言 / 凭据 / 字幕 / 音量） -->
+      <details class="bg-white rounded-lg shadow-sm border border-gray-100 mb-3">
+        <summary class="cursor-pointer select-none px-3 py-2 text-sm font-medium text-gray-700 flex items-center gap-2">
+          <i class="fas fa-cog text-xs text-gray-500"></i>
+          <span>设置（语言 / 凭据 / 字幕 / 音量）</span>
+        </summary>
+        <div class="px-3 pb-3">
+          <div class="grid grid-cols-2 gap-2 mb-3">
+            <div>
+              <label class="block text-xs font-medium text-gray-600 mb-1">原音语言</label>
+              <select id="simulcast-source-language" class="w-full text-sm border border-gray-200 rounded-lg px-2 py-2 bg-white">
+                <option value="auto">自动检测</option>
+                <option value="zh-CN">中文</option>
+                <option value="en">英语</option>
+                <option value="ja">日语</option>
+                <option value="ko">韩语</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-gray-600 mb-1">目标语言</label>
+              <select id="simulcast-target-language" class="w-full text-sm border border-gray-200 rounded-lg px-2 py-2 bg-white">
+                <option value="zh-CN">中文</option>
+                <option value="en">英语</option>
+                <option value="ja">日语</option>
+                <option value="ko">韩语</option>
+              </select>
+            </div>
+            <div class="col-span-2">
+              <label class="block text-xs font-medium text-gray-600 mb-1">火山模型</label>
+              <input id="simulcast-model" type="text" class="w-full text-sm border border-gray-200 rounded-lg px-2 py-2" value="Doubao_scene_SLM_Doubao_SI_model2000000748711437826">
+            </div>
+            <div class="col-span-2">
+              <label class="block text-xs font-medium text-gray-600 mb-1">新版 API Key</label>
+              <input id="simulcast-api-key" type="password" class="w-full text-sm border border-gray-200 rounded-lg px-2 py-2" placeholder="推荐使用新版控制台 API Key">
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-gray-600 mb-1">旧版 App ID</label>
+              <input id="simulcast-app-id" type="text" class="w-full text-sm border border-gray-200 rounded-lg px-2 py-2" placeholder="App ID">
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-gray-600 mb-1">旧版 Access Token</label>
+              <input id="simulcast-access-token" type="password" class="w-full text-sm border border-gray-200 rounded-lg px-2 py-2" placeholder="Access Token">
+            </div>
+            <div class="col-span-2">
+              <label class="block text-xs font-medium text-gray-600 mb-1">旧版 Secret Key</label>
+              <input id="simulcast-secret-key" type="password" class="w-full text-sm border border-gray-200 rounded-lg px-2 py-2" placeholder="Secret Key">
+            </div>
+            <!-- 输出模式已固定为「原音混合」，由下方音量滑块控制，故隐藏选择器 -->
+            <div class="hidden">
+              <select id="simulcast-output-mode">
+                <option value="translatedOnly">仅译音</option>
+                <option value="mixed" selected>原音混合</option>
+                <option value="subtitlesOnly">仅字幕</option>
+              </select>
+            </div>
+            <div class="col-span-2">
+              <label class="block text-xs font-medium text-gray-600 mb-1">字幕模式</label>
+              <select id="simulcast-subtitle-mode" class="w-full text-sm border border-gray-200 rounded-lg px-2 py-2 bg-white">
+                <option value="bilingual">双语字幕</option>
+                <option value="translationOnly">仅译文</option>
+                <option value="off">关闭字幕</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="space-y-2 mb-3">
+            <label class="block text-xs font-medium text-gray-600">原音音量</label>
+            <input id="simulcast-original-volume" type="range" min="0" max="1" step="0.05" value="0.25" class="w-full">
+            <label class="block text-xs font-medium text-gray-600">译音音量</label>
+            <input id="simulcast-translated-volume" type="range" min="0" max="1" step="0.05" value="1" class="w-full">
+            <div>
+              <div class="flex items-center justify-between mb-1">
+                <label class="block text-xs font-medium text-gray-600">译音延迟</label>
+                <span class="text-xs text-gray-400">0-5000 ms</span>
+              </div>
+              <input id="simulcast-translated-delay-ms" type="number" min="0" max="5000" step="100" value="0" class="w-full text-sm border border-gray-200 rounded-lg px-2 py-2" placeholder="0">
+            </div>
+          </div>
+
+          <label class="flex items-center justify-between bg-gray-50 border border-gray-100 rounded-lg px-3 py-2 text-sm mb-2">
+            <span class="text-gray-700">克隆原视频音色</span>
+            <input id="simulcast-voice-clone-toggle" type="checkbox" class="w-4 h-4" checked>
+          </label>
+
+          <label class="flex items-center justify-between bg-gray-50 border border-gray-100 rounded-lg px-3 py-2 text-sm">
+            <span class="text-gray-700">自动同传<span class="text-gray-400">（打开扩展后，视频播放即自动开始）</span></span>
+            <input id="simulcast-auto-toggle" type="checkbox" class="w-4 h-4">
+          </label>
+        </div>
+      </details>
     </div>
 
     <!-- 转写标签页（复用同传 AST s2t 实时源字幕） -->

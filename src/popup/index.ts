@@ -699,6 +699,12 @@ function handleSimulcastUpdate(
     if (simulcastRunning && simulcastFirstSourceWall === 0) {
       simulcastFirstSourceWall = Date.now();
     }
+    // 同传：把当前句叠加到视频上（新源句先出现，译文随后补上）
+    if (simulcastRunning && !transcribeActive) {
+      overlaySource = text;
+      overlayTranslation = '';
+      sendSubtitleToVideo();
+    }
     // 转写会话进行中：源字幕同时累积进转写视图
     if (transcribeActive) {
       applyTranscribeSubtitle(subtitle);
@@ -707,6 +713,10 @@ function handleSimulcastUpdate(
 
   if (SIMULCAST_TRANSLATION_SUBTITLE_EVENTS.has(event)) {
     appendSimulcastSpeakerLog(subtitle, 'translation', text);
+    if (simulcastRunning && !transcribeActive) {
+      overlayTranslation = text;
+      sendSubtitleToVideo();
+    }
     // 首条译文到达 → 一次性按实测滞后对齐视频
     maybeAutoMeasureSyncDelay();
   }
@@ -903,6 +913,9 @@ async function handleSimulcastStopClick(): Promise<void> {
   } finally {
     simulcastRunning = false;
     void sendVideoSync(false, 0); // 还原视频延迟
+    overlaySource = '';
+    overlayTranslation = '';
+    sendSubtitleToVideo(true); // 清除视频上字幕
   }
 }
 
@@ -910,6 +923,22 @@ async function handleSimulcastStopClick(): Promise<void> {
 let simulcastRunning = false;
 let simulcastFirstSourceWall = 0; // 首条源字幕的墙钟时刻（估算管线滞后用）
 let simulcastSyncMeasured = false;
+
+// 视频上字幕叠加：当前句的原文/译文
+let overlaySource = '';
+let overlayTranslation = '';
+
+/** 把当前句下发到内容脚本，在视频上叠加字幕。 */
+function sendSubtitleToVideo(clear = false): void {
+  const mode = getControlValue('simulcast-subtitle-mode', 'bilingual');
+  void sendMessageToActiveTab({
+    type: 'simulcast:subtitle',
+    clear,
+    source: overlaySource,
+    translation: overlayTranslation,
+    mode,
+  }).catch(() => undefined);
+}
 
 // 自动同传：开关持久化 + 触发去抖
 const AUTO_SIMULCAST_STORAGE_KEY = 'simulcastAutoStart';
@@ -1599,7 +1628,9 @@ function setVersionNumber() {
 
 async function selectInitialTab(): Promise<void> {
   try {
-    switchTab('attention');
+    // 默认打开「翻译 → 同声传译」
+    translateSub = 'simultaneous';
+    switchTab('translate');
   } catch (error) {
     logPopupError('选择默认标签页', error);
   }
