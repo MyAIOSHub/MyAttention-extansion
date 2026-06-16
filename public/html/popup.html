@@ -762,13 +762,16 @@
 
     <!-- 采集注意力标签页（合并 AI Chat 与片段） -->
     <div id="attention-content" class="tab-content active flex-1 flex flex-col p-2">
-      <!-- 第一行：导航筛选 pills -->
-      <div id="attention-filter-pills" class="flex items-center gap-1 mb-2">
+      <!-- 第一行：导航筛选 pills（置顶） -->
+      <div id="attention-filter-pills" class="flex flex-wrap items-center gap-1 mb-2 flex-shrink-0">
         <button data-filter="all" class="attention-pill active px-3 py-1 text-xs font-medium rounded-full btn-brand text-white transition-colors">全部</button>
         <button data-filter="aichat" class="attention-pill px-3 py-1 text-xs font-medium rounded-full bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors">AIChat</button>
         <button data-filter="highlight" class="attention-pill px-3 py-1 text-xs font-medium rounded-full bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors">划词</button>
         <button data-filter="dwell" class="attention-pill px-3 py-1 text-xs font-medium rounded-full bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors">停留</button>
         <button data-filter="history" class="attention-pill px-3 py-1 text-xs font-medium rounded-full bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors">未读</button>
+        <button data-filter="translation" class="attention-pill px-3 py-1 text-xs font-medium rounded-full bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors">翻译</button>
+        <button data-filter="question" class="attention-pill px-3 py-1 text-xs font-medium rounded-full bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors">提问</button>
+        <button data-filter="transcribe" class="attention-pill px-3 py-1 text-xs font-medium rounded-full bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors">转写</button>
       </div>
 
       <!-- 第二行：操作按钮 + 搜索 -->

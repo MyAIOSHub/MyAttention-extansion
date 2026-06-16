@@ -218,7 +218,15 @@ const runtimeStatusElements = {
 };
 
 /** 当前注意力筛选 */
-type AttentionFilter = 'all' | 'aichat' | 'highlight' | 'dwell' | 'history';
+type AttentionFilter =
+  | 'all'
+  | 'aichat'
+  | 'highlight'
+  | 'dwell'
+  | 'history'
+  | 'translation'
+  | 'question'
+  | 'transcribe';
 let currentAttentionFilter: AttentionFilter = 'all';
 
 // snippet filter 已由 attention pills 替代，保留空对象兼容
@@ -2993,8 +3001,15 @@ function switchAttentionFilter(filter: AttentionFilter): void {
   // 显示/隐藏片段相关操作按钮
   const actionsEl = document.getElementById('attention-actions');
   if (actionsEl) {
-    actionsEl.classList.toggle('hidden', filter === 'aichat' || filter === 'history');
+    const readOnly =
+      filter === 'aichat' ||
+      filter === 'history' ||
+      filter === 'translation' ||
+      filter === 'question' ||
+      filter === 'transcribe';
+    actionsEl.classList.toggle('hidden', readOnly);
   }
+
 
   // 退出选择合并模式（如果切换到非片段筛选）
   if (filter === 'aichat' && snippetSelectionMode) {
@@ -3051,6 +3066,22 @@ function syncSnippetFilterUI(): void {
 
 function renderCurrentSnippetList(): void {
   renderAttentionList();
+}
+
+/** 文字记录归类：按标题前缀 / headingPath 区分 翻译·提问·转写。 */
+function matchRecordCategory(
+  snippet: Snippet,
+  filter: 'translation' | 'question' | 'transcribe'
+): boolean {
+  const title = (snippet.title || '').trim();
+  const heading = Array.isArray(snippet.headingPath) ? snippet.headingPath[0] : undefined;
+  if (filter === 'transcribe') {
+    return title.startsWith('转写 ·') || title.startsWith('转写·') || heading === '转写';
+  }
+  if (filter === 'translation') {
+    return title.startsWith('翻译 ·') || title.startsWith('翻译·') || heading === '翻译';
+  }
+  return title.startsWith('提问 ·') || title.startsWith('提问·') || heading === '提问';
 }
 
 /**
@@ -3111,6 +3142,23 @@ function renderAttentionList(): void {
     listContainer.innerHTML = '';
     renderSnippetCards(filtered, {
       selectionMode: snippetSelectionMode,
+      selectedSnippetIds,
+    });
+    updateSnippetMergeControls();
+  } else if (filter === 'translation' || filter === 'question' || filter === 'transcribe') {
+    // 文字记录：翻译 / 提问 / 转写（按标题前缀归类）
+    const filtered = cachedSnippets.filter((s) => matchRecordCategory(s, filter));
+    if (!filtered.length) {
+      listEl.classList.add('hidden');
+      if (emptyEl) { emptyEl.classList.remove('hidden'); }
+      updateSnippetMergeControls();
+      return;
+    }
+    if (emptyEl) { emptyEl.classList.add('hidden'); }
+    listEl.classList.remove('hidden');
+    listContainer.innerHTML = '';
+    renderSnippetCards(filtered, {
+      selectionMode: false,
       selectedSnippetIds,
     });
     updateSnippetMergeControls();
