@@ -686,6 +686,8 @@ function handleSimulcastUpdate(
   if (SIMULCAST_TRANSLATION_SUBTITLE_EVENTS.has(event)) {
     appendSimulcastText('simulcast-translated-text', text);
     appendSimulcastSpeakerLog(subtitle, 'translation', text);
+    // 首条译文到达 → 自动估算延迟并重对齐视频
+    maybeAutoMeasureSyncDelay(subtitle.startTime);
   }
 
   if (!statusMessage) {
@@ -851,6 +853,14 @@ async function handleSimulcastStartClick(): Promise<void> {
         : '同声传译捕获会话已提交。',
       'success'
     );
+
+    // 音画同步：开启则延迟主视频对齐译音
+    simulcastRunning = true;
+    simulcastStartWall = Date.now();
+    simulcastSyncMeasured = false;
+    if (isSimulcastSyncOn()) {
+      void sendVideoSync(true, getSyncDelaySec());
+    }
   } catch (error) {
     setTranslationStatus('simulcast-status', getErrorMessage(error), 'error');
   }
@@ -870,7 +880,72 @@ async function handleSimulcastStopClick(): Promise<void> {
     setTranslationStatus('simulcast-status', '已停止同声传译', 'success');
   } catch (error) {
     setTranslationStatus('simulcast-status', getErrorMessage(error), 'error');
+  } finally {
+    simulcastRunning = false;
+    void sendVideoSync(false, 0); // 还原视频静音/延迟
   }
+}
+
+// 音画同步状态
+let simulcastRunning = false;
+let simulcastStartWall = 0;
+let simulcastSyncMeasured = false;
+
+function isSimulcastSyncOn(): boolean {
+  return (document.getElementById('simulcast-sync-toggle') as HTMLInputElement | null)?.checked === true;
+}
+
+function getSyncDelaySec(): number {
+  const el = document.getElementById('simulcast-sync-delay') as HTMLInputElement | null;
+  const v = el ? Number(el.value) : 3;
+  return Number.isFinite(v) ? v : 3;
+}
+
+function setSimulcastSyncStatus(text: string): void {
+  const el = document.getElementById('simulcast-sync-status');
+  if (el) el.textContent = text;
+}
+
+async function sendVideoSync(enabled: boolean, delaySec: number): Promise<void> {
+  try {
+    const resp = await sendMessageToActiveTab<{ videoFound?: boolean; mode?: string }>({
+      type: 'simulcast:syncVideo',
+      enabled,
+      delaySec,
+    });
+    if (!enabled) {
+      setSimulcastSyncStatus('');
+      return;
+    }
+    const videoFound = resp?.videoFound ?? resp?.data?.videoFound;
+    const mode = resp?.mode ?? resp?.data?.mode;
+    if (videoFound === false) {
+      setSimulcastSyncStatus('未找到主视频（在有视频的页面再试）');
+    } else {
+      setSimulcastSyncStatus(`已延迟视频 ${delaySec.toFixed(1)}s 对齐${mode === 'live' ? '（直播缓冲）' : ''}`);
+    }
+  } catch (error) {
+    setSimulcastSyncStatus('同步失败：' + getErrorMessage(error));
+  }
+}
+
+/** P2 自动估算翻译延迟：首条译文字幕到达时，用 实时耗时−源时间戳 估延迟并重对齐。 */
+function maybeAutoMeasureSyncDelay(startTimeMs: number | undefined): void {
+  if (simulcastSyncMeasured || !simulcastRunning || !isSimulcastSyncOn()) return;
+  const auto = (document.getElementById('simulcast-sync-auto') as HTMLInputElement | null)?.checked;
+  if (!auto || simulcastStartWall === 0) return;
+  simulcastSyncMeasured = true;
+  const elapsed = Date.now() - simulcastStartWall;
+  const source = typeof startTimeMs === 'number' ? startTimeMs : 0;
+  // 估译音延迟 ≈ 实时耗时 − 源位置 + ~0.5s(TTS 余量)，夹在 1–6s，0.5s 步进
+  const latencyMs = Math.min(6000, Math.max(1000, elapsed - source + 500));
+  const delaySec = Math.round(latencyMs / 500) * 0.5;
+  const slider = document.getElementById('simulcast-sync-delay') as HTMLInputElement | null;
+  const val = document.getElementById('simulcast-sync-delay-val');
+  if (slider) slider.value = String(delaySec);
+  if (val) val.textContent = `${delaySec.toFixed(1)}s`;
+  void sendVideoSync(true, delaySec);
+  setSimulcastSyncStatus(`自动估算延迟 ${delaySec.toFixed(1)}s，已重对齐`);
 }
 
 // 转写会话是否进行中（决定是否把源字幕路由到转写视图）
@@ -1153,6 +1228,29 @@ function initializeTranslationActions(): void {
 
   document.getElementById('simulcast-stop-btn')?.addEventListener('click', () => {
     void handleSimulcastStopClick();
+  });
+
+  // 音画同步控件
+  const syncToggle = document.getElementById('simulcast-sync-toggle') as HTMLInputElement | null;
+  syncToggle?.addEventListener('change', () => {
+    const on = syncToggle.checked;
+    document.getElementById('simulcast-sync-controls')?.classList.toggle('hidden', !on);
+    if (simulcastRunning) {
+      void sendVideoSync(on, getSyncDelaySec());
+    } else if (!on) {
+      setSimulcastSyncStatus('');
+    }
+  });
+  const syncDelay = document.getElementById('simulcast-sync-delay') as HTMLInputElement | null;
+  syncDelay?.addEventListener('input', () => {
+    const val = document.getElementById('simulcast-sync-delay-val');
+    if (val) val.textContent = `${getSyncDelaySec().toFixed(1)}s`;
+  });
+  syncDelay?.addEventListener('change', () => {
+    if (simulcastRunning && isSimulcastSyncOn()) {
+      simulcastSyncMeasured = true; // 手动调过后不再自动覆盖
+      void sendVideoSync(true, getSyncDelaySec());
+    }
   });
 
   document.getElementById('transcribe-start-btn')?.addEventListener('click', () => {

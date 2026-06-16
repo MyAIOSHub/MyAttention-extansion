@@ -20,6 +20,7 @@ import {
   safeInit,
 } from '@/content/common';
 import { isCapturablePage } from '@/core/page-scope';
+import { initSimulcastVideoSyncListener } from '@/content/simulcast-video-sync';
 import {
   initFloatTag,
   updateFloatTagState,
@@ -1146,6 +1147,8 @@ async function init(): Promise<void> {
     initPageTranslationListener();
     if (isPageFrame) {
       initSelectionTranslationToolbar();
+      // 同声传译音画同步（延迟主视频对齐译音）
+      initSimulcastVideoSyncListener();
     }
 
     reportRuntimeStatus({

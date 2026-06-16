@@ -1564,6 +1564,33 @@
         </div>
       </div>
 
+      <!-- 音画同步：延迟视频对齐译音 -->
+      <div class="bg-white border border-gray-100 rounded-lg p-3 mb-2">
+        <div class="flex items-center justify-between">
+          <div>
+            <label class="text-sm font-medium text-gray-700">音画同步</label>
+            <p class="text-xs text-gray-500 mt-0.5">延迟视频对齐译音（静音原声）</p>
+          </div>
+          <label class="relative inline-flex items-center cursor-pointer">
+            <div class="toggle-switch">
+              <input type="checkbox" id="simulcast-sync-toggle">
+              <div class="toggle-slider"></div>
+            </div>
+          </label>
+        </div>
+        <div id="simulcast-sync-controls" class="hidden mt-3">
+          <div class="flex items-center gap-2">
+            <span class="text-xs text-gray-600 whitespace-nowrap">延迟</span>
+            <input type="range" id="simulcast-sync-delay" min="0" max="5" step="0.5" value="3" class="flex-1">
+            <span id="simulcast-sync-delay-val" class="text-xs font-mono text-gray-700 w-10 text-right">3.0s</span>
+          </div>
+          <label class="flex items-center gap-2 mt-2 text-xs text-gray-600 cursor-pointer">
+            <input type="checkbox" id="simulcast-sync-auto" checked>自动估算延迟
+          </label>
+          <div id="simulcast-sync-status" class="text-xs text-gray-400 mt-1"></div>
+        </div>
+      </div>
+
       <div id="simulcast-status" class="hidden text-xs text-gray-600 bg-gray-50 border border-gray-100 rounded-lg px-3 py-2 mb-2"></div>
       <div class="grid gap-2 text-xs">
         <div class="bg-white border border-gray-100 rounded-lg p-3">
