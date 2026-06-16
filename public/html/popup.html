@@ -1623,14 +1623,22 @@
       <div class="bg-white rounded-lg shadow-sm border border-gray-100 p-3 mb-3 flex-shrink-0">
         <!-- 来源 -->
         <label class="block text-xs font-medium text-gray-600 mb-1">来源</label>
-        <div class="flex items-center gap-1 mb-3 p-0.5 bg-gray-100 rounded-lg">
-          <button id="transcribe-source-tab" class="transcribe-source-btn active flex-1 px-3 py-1.5 text-xs rounded-md" data-source="tab">
-            <i class="fas fa-display mr-1"></i>标签页音频
+        <div class="grid grid-cols-2 gap-1 mb-2 p-0.5 bg-gray-100 rounded-lg">
+          <button id="transcribe-source-tab" type="button" class="transcribe-source-btn active px-2 py-1.5 text-xs rounded-md" data-source="tab">
+            <i class="fas fa-display mr-1"></i>标签页
           </button>
-          <button id="transcribe-source-mic" type="button" class="transcribe-source-btn flex-1 px-3 py-1.5 text-xs rounded-md" data-source="mic">
+          <button id="transcribe-source-mic" type="button" class="transcribe-source-btn px-2 py-1.5 text-xs rounded-md" data-source="mic">
             <i class="fas fa-microphone mr-1"></i>麦克风
           </button>
+          <button id="transcribe-source-file" type="button" class="transcribe-source-btn px-2 py-1.5 text-xs rounded-md" data-source="file">
+            <i class="fas fa-file-audio mr-1"></i>文件
+          </button>
+          <button id="transcribe-source-url" type="button" class="transcribe-source-btn px-2 py-1.5 text-xs rounded-md" data-source="url">
+            <i class="fas fa-link mr-1"></i>链接
+          </button>
         </div>
+        <input id="transcribe-file" type="file" accept="audio/*,video/*" class="hidden w-full text-xs mb-2 file:mr-2 file:rounded file:border-0 file:bg-gray-100 file:px-2 file:py-1 file:text-xs">
+        <input id="transcribe-url" type="url" placeholder="直链音视频 URL（mp3/mp4/wav/m4a）" class="hidden w-full text-sm border border-gray-200 rounded-lg px-2 py-2 mb-2">
 
         <div class="grid grid-cols-2 gap-2">
           <div>

@@ -9,7 +9,13 @@ interface SimulcastOffscreenStartMessage {
   session: {
     tabId: number;
     streamId: string;
-    audioSource?: 'tab' | 'mic';
+    audioSource?: 'tab' | 'mic' | 'file' | 'url';
+    /** 文件转写：媒体字节 base64 */
+    fileData?: string;
+    /** 链接转写：直链音视频 URL */
+    mediaUrl?: string;
+    /** 文件/链接的 MIME */
+    mediaMime?: string;
     recordAudio?: boolean;
     sourceLanguage: string;
     targetLanguage: string;
@@ -44,7 +50,7 @@ declare global {
 
 let activeStream: MediaStream | null = null;
 let activeAudioContext: AudioContext | null = null;
-let activeSource: MediaStreamAudioSourceNode | null = null;
+let activeSource: AudioNode | null = null;
 let activeOriginalGain: GainNode | null = null;
 let activeProcessor: ScriptProcessorNode | null = null;
 let activeAstSession: VolcengineAstSession | null = null;
@@ -55,6 +61,34 @@ let activeTranslatedAudioTimers: number[] = [];
 let activeRecorder: MediaRecorder | null = null;
 let recordedChunks: Blob[] = [];
 let recordTabId: number | null = null;
+// 文件/链接转写的媒体元素
+let activeMediaEl: HTMLAudioElement | null = null;
+let activeMediaObjectUrl: string | null = null;
+
+/** 从文件字节(base64)或直链 URL 构建可读样本的音频元素（同源 blob，不污染 Web Audio）。 */
+async function buildMediaSourceElement(
+  session: SimulcastOffscreenStartMessage['session']
+): Promise<HTMLAudioElement> {
+  let blob: Blob;
+  if (session.audioSource === 'file' && session.fileData) {
+    const bytes = Uint8Array.from(atob(session.fileData), (c) => c.charCodeAt(0));
+    blob = new Blob([bytes], { type: session.mediaMime || 'audio/*' });
+  } else if (session.audioSource === 'url' && session.mediaUrl) {
+    const resp = await fetch(session.mediaUrl); // host_permissions 绕过 CORS
+    if (!resp.ok) {
+      throw new Error(`拉取链接失败 (${resp.status})`);
+    }
+    blob = await resp.blob();
+  } else {
+    throw new Error('缺少文件或链接');
+  }
+  activeMediaObjectUrl = URL.createObjectURL(blob);
+  const el = new Audio();
+  el.src = activeMediaObjectUrl;
+  el.muted = true; // 不外放 + 满足自动播放策略；MediaElementSource 仍接收样本
+  el.preload = 'auto';
+  return el;
+}
 
 function blobToBase64(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -126,6 +160,17 @@ function stopActiveCapture(): void {
 
   activeStream?.getTracks().forEach((track) => track.stop());
   activeStream = null;
+
+  // 文件/链接媒体元素收尾
+  if (activeMediaEl) {
+    activeMediaEl.pause();
+    activeMediaEl.src = '';
+    activeMediaEl = null;
+  }
+  if (activeMediaObjectUrl) {
+    URL.revokeObjectURL(activeMediaObjectUrl);
+    activeMediaObjectUrl = null;
+  }
 
   void activeAudioContext?.close().catch(() => undefined);
   activeAudioContext = null;
@@ -297,7 +342,7 @@ function createAstSession(message: SimulcastOffscreenStartMessage): VolcengineAs
 
 function connectAudioToAst(
   audioContext: AudioContext,
-  source: MediaStreamAudioSourceNode,
+  source: AudioNode,
   astSession: VolcengineAstSession
 ): ScriptProcessorNode {
   const pcmChunker = new PcmChunker(AST_PCM_CHUNK_BYTES, (chunk) => {
@@ -316,7 +361,7 @@ function connectAudioToAst(
 
 function connectOriginalPlayback(
   audioContext: AudioContext,
-  source: MediaStreamAudioSourceNode,
+  source: AudioNode,
   session: SimulcastOffscreenStartMessage['session']
 ): GainNode {
   const gain = audioContext.createGain();
@@ -329,7 +374,7 @@ function connectOriginalPlayback(
 function cleanupFailedCapture(resources: {
   stream?: MediaStream;
   audioContext?: AudioContext;
-  source?: MediaStreamAudioSourceNode;
+  source?: AudioNode;
   originalGain?: GainNode;
   processor?: ScriptProcessorNode;
   astSession?: VolcengineAstSession;
@@ -349,64 +394,92 @@ async function startCapture(message: SimulcastOffscreenStartMessage): Promise<{
 }> {
   stopActiveCapture();
 
+  const session = message.session;
+  const isMedia = session.audioSource === 'file' || session.audioSource === 'url';
+
   let stream: MediaStream | undefined;
   let audioContext: AudioContext | undefined;
-  let source: MediaStreamAudioSourceNode | undefined;
+  let source: AudioNode | undefined;
   let originalGain: GainNode | undefined;
   let processor: ScriptProcessorNode | undefined;
   let astSession: VolcengineAstSession | undefined;
+  let mediaEl: HTMLAudioElement | undefined;
 
   try {
-    stream = await navigator.mediaDevices.getUserMedia(
-      message.session.audioSource === 'mic'
-        ? { audio: true, video: false }
-        : createTabAudioConstraints(message.session.streamId)
-    );
-    if (message.session.recordAudio && stream) {
-      recordedChunks = [];
-      try {
-        const recorder = new MediaRecorder(stream);
-        recorder.ondataavailable = (event): void => {
-          if (event.data && event.data.size > 0) recordedChunks.push(event.data);
-        };
-        recorder.start(1000);
-        activeRecorder = recorder;
-        recordTabId = message.session.tabId;
-      } catch {
-        activeRecorder = null;
-      }
-    }
     const AudioContextClass = window.AudioContext || window.webkitAudioContext;
     audioContext = new AudioContextClass();
-    source = audioContext.createMediaStreamSource(stream);
-    astSession = createAstSession(message);
 
-    originalGain = connectOriginalPlayback(audioContext, source, message.session);
+    if (isMedia) {
+      // 文件/链接：用音频元素当源，实时(1x)播入现有 PCM→AST 管线
+      mediaEl = await buildMediaSourceElement(session);
+      source = audioContext.createMediaElementSource(mediaEl);
+    } else {
+      stream = await navigator.mediaDevices.getUserMedia(
+        session.audioSource === 'mic'
+          ? { audio: true, video: false }
+          : createTabAudioConstraints(session.streamId)
+      );
+      if (session.recordAudio && stream) {
+        recordedChunks = [];
+        try {
+          const recorder = new MediaRecorder(stream);
+          recorder.ondataavailable = (event): void => {
+            if (event.data && event.data.size > 0) recordedChunks.push(event.data);
+          };
+          recorder.start(1000);
+          activeRecorder = recorder;
+          recordTabId = session.tabId;
+        } catch {
+          activeRecorder = null;
+        }
+      }
+      source = audioContext.createMediaStreamSource(stream);
+      originalGain = connectOriginalPlayback(audioContext, source, session);
+    }
+
+    astSession = createAstSession(message);
     await astSession.start();
     await astSession.waitUntilStarted();
     processor = connectAudioToAst(audioContext, source, astSession);
+
+    if (isMedia && mediaEl) {
+      const mediaTabId = session.tabId;
+      mediaEl.addEventListener('ended', () => {
+        activeAstSession?.finish();
+        chrome.runtime.sendMessage({
+          type: 'simulcast:update',
+          target: 'background',
+          tabId: mediaTabId,
+          status: { kind: 'success', message: '文件/链接转写完成' },
+        });
+      });
+      await audioContext.resume().catch(() => undefined);
+      await mediaEl.play();
+    }
   } catch (error) {
-    cleanupFailedCapture({
-      stream,
-      audioContext,
-      source,
-      originalGain,
-      processor,
-      astSession,
-    });
+    cleanupFailedCapture({ stream, audioContext, source, originalGain, processor, astSession });
+    if (mediaEl) {
+      mediaEl.pause();
+      mediaEl.src = '';
+    }
+    if (activeMediaObjectUrl) {
+      URL.revokeObjectURL(activeMediaObjectUrl);
+      activeMediaObjectUrl = null;
+    }
     throw error;
   }
 
-  if (!stream || !audioContext || !source || !originalGain || !processor || !astSession) {
+  if (!audioContext || !source || !processor || !astSession) {
     throw new Error('同声传译音频链路初始化失败');
   }
 
-  activeStream = stream;
+  activeStream = stream ?? null;
   activeAudioContext = audioContext;
   activeSource = source;
-  activeOriginalGain = originalGain;
+  activeOriginalGain = originalGain ?? null;
   activeProcessor = processor;
   activeAstSession = astSession;
+  activeMediaEl = mediaEl ?? null;
 
   return {
     status: 'ok',

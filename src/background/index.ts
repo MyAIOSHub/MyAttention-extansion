@@ -323,7 +323,13 @@ function buildStartSimulcastRequest(params: RuntimeMessageParams): StartSimulcas
   return {
     tabId: params.tabId,
     streamId: getStringParam(params.streamId, '') || undefined,
-    audioSource: getStringParam(params.audioSource, 'tab') === 'mic' ? 'mic' : 'tab',
+    audioSource: ((): 'tab' | 'mic' | 'file' | 'url' => {
+      const s = getStringParam(params.audioSource, 'tab');
+      return s === 'mic' || s === 'file' || s === 'url' ? s : 'tab';
+    })(),
+    fileData: typeof params.fileData === 'string' ? params.fileData : undefined,
+    mediaUrl: getStringParam(params.mediaUrl, '') || undefined,
+    mediaMime: getStringParam(params.mediaMime, '') || undefined,
     recordAudio: params.recordAudio === true,
     sourceLanguage: getStringParam(params.sourceLanguage, 'auto'),
     targetLanguage: getStringParam(params.targetLanguage, 'zh-CN'),

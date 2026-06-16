@@ -950,8 +950,20 @@ function maybeAutoMeasureSyncDelay(startTimeMs: number | undefined): void {
 
 // 转写会话是否进行中（决定是否把源字幕路由到转写视图）
 let transcribeActive = false;
-// 转写音频来源：标签页音频 / 麦克风
-let transcribeSource: 'tab' | 'mic' = 'tab';
+// 转写音频来源：标签页 / 麦克风 / 文件 / 链接
+let transcribeSource: 'tab' | 'mic' | 'file' | 'url' = 'tab';
+
+function readFileAsBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (): void => {
+      const result = typeof reader.result === 'string' ? reader.result : '';
+      resolve(result.includes(',') ? result.slice(result.indexOf(',') + 1) : '');
+    };
+    reader.onerror = (): void => reject(reader.error ?? new Error('读取文件失败'));
+    reader.readAsDataURL(file);
+  });
+}
 
 function readSavedSettings(): Promise<AppSettings> {
   return new Promise((resolve) => {
@@ -990,9 +1002,25 @@ async function handleTranscribeStartClick(): Promise<void> {
     // 校验凭据是否齐全（缺失会抛错）
     buildVolcengineAstHeaders(credentials);
 
-    const useMic = transcribeSource === 'mic';
+    let fileData: string | undefined;
+    let mediaMime: string | undefined;
+    let mediaUrl: string | undefined;
+    if (transcribeSource === 'file') {
+      const input = document.getElementById('transcribe-file') as HTMLInputElement | null;
+      const file = input?.files?.[0];
+      if (!file) throw new Error('请先选择音视频文件');
+      setTranscribeStatus('正在读取文件...', 'info');
+      fileData = await readFileAsBase64(file);
+      mediaMime = file.type || undefined;
+    } else if (transcribeSource === 'url') {
+      const urlInput = document.getElementById('transcribe-url') as HTMLInputElement | null;
+      mediaUrl = (urlInput?.value || '').trim();
+      if (!mediaUrl) throw new Error('请先输入直链音视频 URL');
+    }
+
+    const isTab = transcribeSource === 'tab';
     const [streamId, activeTab] = await Promise.all([
-      useMic ? Promise.resolve('') : requestCurrentTabMediaStreamId(),
+      isTab ? requestCurrentTabMediaStreamId() : Promise.resolve(''),
       getActiveTab(),
     ]);
     if (typeof activeTab?.id !== 'number') {
@@ -1006,7 +1034,11 @@ async function handleTranscribeStartClick(): Promise<void> {
       tabId: activeTab.id,
       streamId,
       audioSource: transcribeSource,
-      recordAudio: true,
+      fileData,
+      mediaUrl,
+      mediaMime,
+      // 文件/链接本身即音源，无需再录制
+      recordAudio: transcribeSource === 'tab' || transcribeSource === 'mic',
       sourceLanguage: getControlValue('transcribe-source-language', 'auto'),
       targetLanguage: 'auto',
       model: getControlValue(
@@ -1275,12 +1307,14 @@ function initializeTranslationActions(): void {
   document.querySelectorAll('.transcribe-source-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
       if (transcribeActive) return; // 会话进行中不切换来源
-      const source = (btn as HTMLElement).dataset.source as 'tab' | 'mic' | undefined;
-      if (source !== 'tab' && source !== 'mic') return;
+      const source = (btn as HTMLElement).dataset.source;
+      if (source !== 'tab' && source !== 'mic' && source !== 'file' && source !== 'url') return;
       transcribeSource = source;
       document.querySelectorAll('.transcribe-source-btn').forEach((b) => {
         b.classList.toggle('active', (b as HTMLElement).dataset.source === source);
       });
+      document.getElementById('transcribe-file')?.classList.toggle('hidden', source !== 'file');
+      document.getElementById('transcribe-url')?.classList.toggle('hidden', source !== 'url');
     });
   });
 }
