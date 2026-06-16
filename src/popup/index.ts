@@ -557,19 +557,29 @@ function setTranslationStatus(
   element.classList.remove('hidden');
 }
 
-function appendSimulcastText(elementId: string, text: string): void {
-  const element = document.getElementById(elementId);
-  const normalizedText = text.trim();
-  if (!element || !normalizedText) {
-    return;
-  }
-
-  const currentText = element.textContent?.trim();
-  element.textContent = currentText ? `${currentText} ${normalizedText}` : normalizedText;
-}
-
 function getSimulcastChannelLabel(channel: SimulcastSubtitleChannel): string {
   return channel === 'source' ? '原文' : '译文';
+}
+
+/** 把某通道(原文/译文)按说话人分段渲染到对应容器。 */
+function renderSimulcastChannel(elementId: string, channel: SimulcastSubtitleChannel): void {
+  const el = document.getElementById(elementId);
+  if (!el) return;
+  const segs = simulcastSpeakerSegments.filter((s) => s.channel === channel).slice(-60);
+  if (!segs.length) {
+    el.innerHTML = '<div class="text-gray-400 text-xs">等待…</div>';
+    return;
+  }
+  el.innerHTML = segs
+    .map(
+      (s) =>
+        `<div class="flex gap-2">` +
+        `<span class="text-xs font-semibold text-brand shrink-0 mt-0.5">${escapeHtml(s.speakerLabel)}</span>` +
+        `<span class="text-gray-800 text-sm leading-relaxed">${escapeHtml(s.text)}</span>` +
+        `</div>`
+    )
+    .join('');
+  el.scrollTop = el.scrollHeight;
 }
 
 function renderSimulcastSpeakerLog(): void {
@@ -623,17 +633,15 @@ function appendSimulcastSpeakerLog(
   if (simulcastSpeakerSegments.length > 120) {
     simulcastSpeakerSegments = simulcastSpeakerSegments.slice(-80);
   }
+  renderSimulcastChannel('simulcast-original-text', 'source');
+  renderSimulcastChannel('simulcast-translated-text', 'translation');
   renderSimulcastSpeakerLog();
 }
 
 function clearSimulcastStreamingOutput(): void {
-  ['simulcast-original-text', 'simulcast-translated-text'].forEach((id) => {
-    const element = document.getElementById(id);
-    if (element) {
-      element.textContent = '';
-    }
-  });
   simulcastSpeakerSegments = [];
+  renderSimulcastChannel('simulcast-original-text', 'source');
+  renderSimulcastChannel('simulcast-translated-text', 'translation');
   renderSimulcastSpeakerLog();
 }
 
@@ -685,7 +693,6 @@ function handleSimulcastUpdate(
   }
 
   if (SIMULCAST_SOURCE_SUBTITLE_EVENTS.has(event)) {
-    appendSimulcastText('simulcast-original-text', text);
     appendSimulcastSpeakerLog(subtitle, 'source', text);
     // 转写会话进行中：源字幕同时累积进转写视图
     if (transcribeActive) {
@@ -694,7 +701,6 @@ function handleSimulcastUpdate(
   }
 
   if (SIMULCAST_TRANSLATION_SUBTITLE_EVENTS.has(event)) {
-    appendSimulcastText('simulcast-translated-text', text);
     appendSimulcastSpeakerLog(subtitle, 'translation', text);
     // 首条译文到达 → 自动估算延迟并重对齐视频
     maybeAutoMeasureSyncDelay(subtitle.startTime);
