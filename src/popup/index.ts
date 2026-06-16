@@ -895,9 +895,18 @@ async function handleTranscribeStartClick(): Promise<void> {
     setTranscribeStatus('正在准备转写会话...', 'info');
     const settings = await readSavedSettings();
     const si = settings.simultaneousInterpretation ?? DEFAULT_SETTINGS.simultaneousInterpretation;
-    const credentials = si?.credentials;
-    if (!credentials) {
-      throw new Error('请先在「同声传译」页配置火山 AST 凭据');
+    const saved = si?.credentials;
+    const credDefaults = DEFAULT_SETTINGS.simultaneousInterpretation?.credentials;
+    // 凭据优先读「同声传译」页输入框（与同传一致），回落到已保存设置/默认
+    const credentials = {
+      apiKey: getControlValue('simulcast-api-key', saved?.apiKey ?? credDefaults?.apiKey ?? ''),
+      appId: getControlValue('simulcast-app-id', saved?.appId ?? credDefaults?.appId ?? ''),
+      accessToken: getControlValue('simulcast-access-token', saved?.accessToken ?? credDefaults?.accessToken ?? ''),
+      secretKey: getControlValue('simulcast-secret-key', saved?.secretKey ?? credDefaults?.secretKey ?? ''),
+      resourceId: saved?.resourceId ?? credDefaults?.resourceId ?? '',
+    };
+    if (!credentials.apiKey && !(credentials.appId && credentials.accessToken)) {
+      throw new Error('请先在「同声传译」页填入火山 AST 凭据（新版 API Key 或 旧版 App ID + Access Token）');
     }
     // 校验凭据是否齐全（缺失会抛错）
     buildVolcengineAstHeaders(credentials);
@@ -921,7 +930,10 @@ async function handleTranscribeStartClick(): Promise<void> {
       recordAudio: true,
       sourceLanguage: getControlValue('transcribe-source-language', 'auto'),
       targetLanguage: 'auto',
-      model: si?.model ?? DEFAULT_SETTINGS.simultaneousInterpretation?.model ?? '',
+      model: getControlValue(
+        'simulcast-model',
+        si?.model ?? DEFAULT_SETTINGS.simultaneousInterpretation?.model ?? ''
+      ),
       audioOutputMode: 'subtitlesOnly', // 强制 s2t：仅源字幕，无翻译/TTS
       originalVolume: 0,
       translatedVolume: 0,
