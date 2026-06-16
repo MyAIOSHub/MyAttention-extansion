@@ -589,9 +589,19 @@ function renderSimulcastPaired(): void {
     return n;
   };
 
+  // 用墙钟时间做时间戳（火山实时 AST 的 startTime 常为 0）：相对会话最早一条计时
+  const base = simulcastSpeakerSegments.reduce(
+    (min, s) => (s.clockWall > 0 && s.clockWall < min ? s.clockWall : min),
+    Number.POSITIVE_INFINITY
+  );
+  const relTime = (s: SimulcastSpeakerSegment): string =>
+    Number.isFinite(base) && s.clockWall > 0
+      ? formatSimulcastTimestamp(s.clockWall - base)
+      : '--:--';
+
   const turns = sources.map((src, i) => ({
     no: speakerNoFor(src, i),
-    time: formatSimulcastTimestamp(src.startTime),
+    time: relTime(src),
     source: src.text,
     translation: translations[i]?.text ?? '',
   }));
@@ -623,6 +633,7 @@ function appendSimulcastSpeakerLog(
     endTime: subtitle.endTime,
     spkChg: subtitle.spkChg || SIMULCAST_SUBTITLE_START_EVENTS.has(subtitle.event ?? 0),
     replaceText: !SIMULCAST_SUBTITLE_START_EVENTS.has(subtitle.event ?? 0),
+    clockWall: Date.now(),
   });
   if (simulcastSpeakerSegments.length > 120) {
     simulcastSpeakerSegments = simulcastSpeakerSegments.slice(-80);

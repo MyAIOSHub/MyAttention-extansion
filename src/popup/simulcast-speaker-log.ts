@@ -8,6 +8,8 @@ export interface SimulcastSpeakerUpdate {
   endTime?: number;
   spkChg?: boolean;
   replaceText?: boolean;
+  /** 墙钟时刻(ms)：火山实时 AST 不给可用 startTime，用墙钟时间做分段时间戳。 */
+  clockWall?: number;
 }
 
 export interface SimulcastSpeakerSegment {
@@ -18,6 +20,8 @@ export interface SimulcastSpeakerSegment {
   startTime: number;
   endTime: number;
   text: string;
+  /** 该轮次首次出现的墙钟时刻(ms)；渲染时相对会话起点格式化。 */
+  clockWall: number;
 }
 
 const UNKNOWN_SPEAKER_ID = '__unknown__';
@@ -98,6 +102,7 @@ export function reduceSimulcastSpeakerSegments(
       startTime,
       endTime,
       text,
+      clockWall: typeof update.clockWall === 'number' ? update.clockWall : 0,
     },
   ];
 }
