@@ -85,7 +85,9 @@ async function buildMediaSourceElement(
   activeMediaObjectUrl = URL.createObjectURL(blob);
   const el = new Audio();
   el.src = activeMediaObjectUrl;
-  el.muted = true; // 不外放 + 满足自动播放策略；MediaElementSource 仍接收样本
+  // 不可 muted：被 createMediaElementSource 接管后，muted/volume=0 会让节点只输出静音，
+  // AST 收到静音 → 无字幕。靠图路由保证不外放（source 仅接 AST 的 ScriptProcessor，
+  // 该节点不写 output → 到 destination 为静音），故无需静音元素。
   el.preload = 'auto';
   return el;
 }
