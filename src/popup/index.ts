@@ -184,6 +184,10 @@ let cachedConversations: Conversation[] = [];
 let cachedSnippets: Snippet[] = [];
 let cachedHistory: BrowsingHistoryItem[] = [];
 let pendingRecommendParams: { triggerSource: 'from_summary'; summaryTaskId: string } | null = null;
+// 翻译 tab 子页：immersive=沉浸式 / simultaneous=同声传译
+let translateSub: 'immersive' | 'simultaneous' = 'immersive';
+// 总结 tab 子页：summary=总结 / discover=发现（原推荐页）
+let summarySub: 'summary' | 'discover' = 'summary';
 let snippetFilterState: SnippetFilterState = { ...DEFAULT_SNIPPET_FILTER_STATE };
 let snippetSelectionMode = false;
 const selectedSnippetIds = new Set<string>();
@@ -1446,36 +1450,45 @@ function initializeSettingsManagement() {
 function initializeMemoriesList() {
   Logger.debug('[Popup] 初始化记忆列表');
 
-  // 注册标签切换监听
+  // 注册标签切换监听（5 栏：翻译/转写/记录/总结/设置）
+  const tabTranslate = document.getElementById('tab-translate');
+  const tabTranscribe = document.getElementById('tab-transcribe');
   const tabAttention = document.getElementById('tab-attention');
   const tabSummary = document.getElementById('tab-summary');
-  const tabRecommend = document.getElementById('tab-recommend');
-  const tabImmersiveTranslation = document.getElementById('tab-immersive-translation');
-  const tabSimultaneousInterpretation = document.getElementById('tab-simultaneous-interpretation');
-  const tabTranscribe = document.getElementById('tab-transcribe');
   const tabSettings = document.getElementById('tab-settings');
 
-  if (tabAttention) {
-    tabAttention.addEventListener('click', () => switchTab('attention'));
-  }
-  if (tabSummary) {
-    tabSummary.addEventListener('click', () => switchTab('summary'));
-  }
-  if (tabRecommend) {
-    tabRecommend.addEventListener('click', () => switchTab('recommend'));
-  }
-  if (tabImmersiveTranslation) {
-    tabImmersiveTranslation.addEventListener('click', () => switchTab('immersive-translation'));
-  }
-  if (tabSimultaneousInterpretation) {
-    tabSimultaneousInterpretation.addEventListener('click', () => switchTab('simultaneous-interpretation'));
+  if (tabTranslate) {
+    tabTranslate.addEventListener('click', () => switchTab('translate'));
   }
   if (tabTranscribe) {
     tabTranscribe.addEventListener('click', () => switchTab('transcribe'));
   }
+  if (tabAttention) {
+    tabAttention.addEventListener('click', () => switchTab('attention'));
+  }
+  if (tabSummary) {
+    // 从侧栏进入总结默认落「总结」子页
+    tabSummary.addEventListener('click', () => {
+      summarySub = 'summary';
+      switchTab('summary');
+    });
+  }
   if (tabSettings) {
     tabSettings.addEventListener('click', () => switchTab('settings'));
   }
+
+  // 翻译子页：沉浸式 / 同声传译
+  document.querySelectorAll('.translate-subtab').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      applyTranslateSub((btn as HTMLElement).dataset.translateSub as 'immersive' | 'simultaneous');
+    });
+  });
+  // 总结子页：总结 / 发现
+  document.querySelectorAll('.summary-subtab').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      applySummarySub((btn as HTMLElement).dataset.summarySub as 'summary' | 'discover');
+    });
+  });
 
   // 注册导航筛选 pill 按钮
   const filterPills = document.querySelectorAll('#attention-filter-pills .attention-pill');
@@ -2613,14 +2626,7 @@ function initializeRecommendSettings(): void {
   }
 }
 
-type PopupTabName =
-  | 'attention'
-  | 'summary'
-  | 'recommend'
-  | 'immersive-translation'
-  | 'simultaneous-interpretation'
-  | 'transcribe'
-  | 'settings';
+type PopupTabName = 'translate' | 'transcribe' | 'attention' | 'summary' | 'settings';
 
 function switchTab(tabName: PopupTabName): void {
   Logger.debug(`[Popup] 切换标签页: ${tabName}`);
@@ -2636,23 +2642,28 @@ function switchTab(tabName: PopupTabName): void {
 
   // 更新标签按钮样式
   tabs.forEach((tab) => {
-    if (tab.id === `tab-${tabName}`) {
-      tab.classList.add('active');
-    } else {
-      tab.classList.remove('active');
-    }
+    tab.classList.toggle('active', tab.id === `tab-${tabName}`);
   });
 
-  // 更新内容显示
+  // 先隐藏全部面板
   contents.forEach((content) => {
-    if (content.id === `${tabName}-content`) {
-      content.classList.add('active');
-      content.classList.remove('hidden');
-    } else {
-      content.classList.remove('active');
-      content.classList.add('hidden');
-    }
+    content.classList.remove('active');
+    content.classList.add('hidden');
   });
+
+  // 显示当前面板：翻译/总结由子页决定，其余按 `${tab}-content`
+  if (tabName === 'translate') {
+    applyTranslateSub(translateSub);
+  } else if (tabName === 'summary') {
+    applySummarySub(summarySub);
+  } else {
+    const el = document.getElementById(`${tabName}-content`);
+    if (el) {
+      el.classList.add('active');
+      el.classList.remove('hidden');
+    }
+    onRecommendTabDeactivated();
+  }
 
   // 显示主导航和概览（从详情页返回时）
   const dataOverview = document.querySelector('header');
@@ -2667,12 +2678,48 @@ function switchTab(tabName: PopupTabName): void {
     enqueueRefresh('refreshBrowsingHistory');
     enqueueRefresh('refreshStorageStats');
   }
+}
 
-  if (tabName === 'recommend') {
+/** 翻译 tab 子页切换：沉浸式 / 同声传译。 */
+function applyTranslateSub(sub: 'immersive' | 'simultaneous'): void {
+  translateSub = sub;
+  document.querySelectorAll('.translate-subtab').forEach((btn) => {
+    const el = btn as HTMLElement;
+    el.classList.toggle('active', el.dataset.translateSub === sub);
+  });
+  const immersive = document.getElementById('immersive-translation-content');
+  const simultaneous = document.getElementById('simultaneous-interpretation-content');
+  const show = sub === 'immersive' ? immersive : simultaneous;
+  const hide = sub === 'immersive' ? simultaneous : immersive;
+  hide?.classList.remove('active');
+  hide?.classList.add('hidden');
+  show?.classList.add('active');
+  show?.classList.remove('hidden');
+  onRecommendTabDeactivated();
+}
+
+/** 总结 tab 子页切换：总结 / 发现（发现复用原推荐页与控制器）。 */
+function applySummarySub(sub: 'summary' | 'discover'): void {
+  summarySub = sub;
+  document.querySelectorAll('.summary-subtab').forEach((btn) => {
+    const el = btn as HTMLElement;
+    el.classList.toggle('active', el.dataset.summarySub === sub);
+  });
+  const summaryEl = document.getElementById('summary-content');
+  const recEl = document.getElementById('recommend-content');
+  if (sub === 'discover') {
+    summaryEl?.classList.remove('active');
+    summaryEl?.classList.add('hidden');
+    recEl?.classList.add('active');
+    recEl?.classList.remove('hidden');
     const params = pendingRecommendParams;
     pendingRecommendParams = null;
     void onRecommendTabActivated(params ?? undefined);
   } else {
+    recEl?.classList.remove('active');
+    recEl?.classList.add('hidden');
+    summaryEl?.classList.add('active');
+    summaryEl?.classList.remove('hidden');
     onRecommendTabDeactivated();
   }
 }
@@ -3601,5 +3648,6 @@ if (document.readyState === 'loading') {
 
 export function jumpToRecommendFromSummary(summaryTaskId: string): void {
   pendingRecommendParams = { triggerSource: 'from_summary', summaryTaskId };
-  switchTab('recommend');
+  summarySub = 'discover';
+  switchTab('summary');
 }

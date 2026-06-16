@@ -139,8 +139,10 @@
     .brand-color-trigger input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
     .brand-color-trigger input[type="color"]::-webkit-color-swatch { border: none; }
 
-    /* 转写来源切换 */
-    .transcribe-source-btn {
+    /* 转写来源 / 翻译·总结 子页切换 */
+    .transcribe-source-btn,
+    .translate-subtab,
+    .summary-subtab {
       border: none;
       background: transparent;
       color: var(--text-secondary);
@@ -148,10 +150,16 @@
       cursor: pointer;
       transition: all 0.15s ease;
     }
-    .transcribe-source-btn.active {
+    .transcribe-source-btn.active,
+    .translate-subtab.active,
+    .summary-subtab.active {
       background-color: var(--bg-surface);
       color: var(--text-primary);
       box-shadow: var(--shadow-sm);
+    }
+    .translate-subtab:not(.active):hover,
+    .summary-subtab:not(.active):hover {
+      color: var(--text-primary);
     }
 
     .attention-pill {
@@ -1248,6 +1256,10 @@
     
     <!-- 总结注意力页面 -->
     <div id="summary-content" class="tab-content hidden flex-1 flex flex-col p-2">
+      <div class="flex items-center gap-1 mb-3 p-0.5 bg-gray-100 rounded-lg flex-shrink-0">
+        <button data-summary-sub="summary" class="summary-subtab active flex-1 px-3 py-1.5 text-xs rounded-md">总结</button>
+        <button data-summary-sub="discover" class="summary-subtab flex-1 px-3 py-1.5 text-xs rounded-md">发现</button>
+      </div>
       <div class="flex items-center justify-between mb-3">
         <div>
           <h2 class="text-sm font-semibold text-gray-800">总结注意力</h2>
@@ -1307,8 +1319,12 @@
       </div>
     </div>
 
-    <!-- 推荐注意力页面 -->
+    <!-- 推荐注意力页面（发现，作为总结 tab 的子页） -->
     <div id="recommend-content" class="tab-content hidden flex-1 flex flex-col p-2">
+      <div class="flex items-center gap-1 mb-3 p-0.5 bg-gray-100 rounded-lg flex-shrink-0">
+        <button data-summary-sub="summary" class="summary-subtab flex-1 px-3 py-1.5 text-xs rounded-md">总结</button>
+        <button data-summary-sub="discover" class="summary-subtab active flex-1 px-3 py-1.5 text-xs rounded-md">发现</button>
+      </div>
       <div class="mb-3">
         <h2 class="text-sm font-semibold text-gray-800">发现注意力</h2>
         <p class="text-xs text-gray-500">源头信息推荐</p>
@@ -1348,6 +1364,10 @@
 
     <!-- 沉浸翻译页面 -->
     <div id="immersive-translation-content" class="tab-content hidden flex-1 flex flex-col p-2">
+      <div class="flex items-center gap-1 mb-3 p-0.5 bg-gray-100 rounded-lg flex-shrink-0">
+        <button data-translate-sub="immersive" class="translate-subtab active flex-1 px-3 py-1.5 text-xs rounded-md">沉浸式翻译</button>
+        <button data-translate-sub="simultaneous" class="translate-subtab flex-1 px-3 py-1.5 text-xs rounded-md">同声传译</button>
+      </div>
       <div class="mb-3">
         <h2 class="text-sm font-semibold text-gray-800">沉浸翻译</h2>
         <p class="text-xs text-gray-500">网页正文、选区、输入框与视频字幕翻译</p>
@@ -1445,6 +1465,10 @@
 
     <!-- 同声传译页面 -->
     <div id="simultaneous-interpretation-content" class="tab-content hidden flex-1 flex flex-col p-2">
+      <div class="flex items-center gap-1 mb-3 p-0.5 bg-gray-100 rounded-lg flex-shrink-0">
+        <button data-translate-sub="immersive" class="translate-subtab flex-1 px-3 py-1.5 text-xs rounded-md">沉浸式翻译</button>
+        <button data-translate-sub="simultaneous" class="translate-subtab active flex-1 px-3 py-1.5 text-xs rounded-md">同声传译</button>
+      </div>
       <div class="mb-3">
         <h2 class="text-sm font-semibold text-gray-800">同声传译</h2>
         <p class="text-xs text-gray-500">捕获网页音频，调用同传 API 并克隆音色输出</p>
@@ -2027,25 +2051,19 @@
     </div>
   </div>
   
-  <!-- 侧边栏导航 -->
+  <!-- 侧边栏导航（5 栏：翻译/转写/记录/总结/设置） -->
   <div class="sidebar">
-    <button id="tab-attention" class="sidebar-btn active" title="采集注意力">
-      <i class="fas fa-layer-group"></i>
-    </button>
-    <button id="tab-summary" class="sidebar-btn" title="总结注意力">
-      <i class="fas fa-brain"></i>
-    </button>
-    <button id="tab-recommend" class="sidebar-btn" title="推荐注意力">
-      <i class="fas fa-compass"></i>
-    </button>
-    <button id="tab-immersive-translation" class="sidebar-btn" title="沉浸翻译">
+    <button id="tab-translate" class="sidebar-btn" title="翻译">
       <i class="fas fa-language"></i>
-    </button>
-    <button id="tab-simultaneous-interpretation" class="sidebar-btn" title="同声传译">
-      <i class="fas fa-headphones-alt"></i>
     </button>
     <button id="tab-transcribe" class="sidebar-btn" title="转写">
       <i class="fas fa-closed-captioning"></i>
+    </button>
+    <button id="tab-attention" class="sidebar-btn active" title="记录">
+      <i class="fas fa-layer-group"></i>
+    </button>
+    <button id="tab-summary" class="sidebar-btn" title="总结">
+      <i class="fas fa-brain"></i>
     </button>
     <button id="tab-settings" class="sidebar-btn" title="设置">
       <i class="fas fa-cog"></i>

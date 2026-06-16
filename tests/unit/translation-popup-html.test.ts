@@ -5,14 +5,15 @@ import { describe, expect, it } from 'vitest';
 describe('translation popup shell', () => {
   const popupHtml = readFileSync(join(process.cwd(), 'public', 'html', 'popup.html'), 'utf8');
 
-  it('exposes immersive translation and simultaneous interpretation tab buttons', () => {
+  it('exposes a 翻译 tab with immersive / simultaneous sub-toggle', () => {
     const manifest = JSON.parse(readFileSync(join(process.cwd(), 'public', 'manifest.json'), 'utf8'));
 
     expect(manifest.action.default_popup).toBe('html/popup.html');
-    expect(popupHtml).toContain('id="tab-immersive-translation"');
-    expect(popupHtml).toContain('id="tab-simultaneous-interpretation"');
-    expect(popupHtml).toContain('title="沉浸翻译"');
-    expect(popupHtml).toContain('title="同声传译"');
+    // 5-tab IA: 沉浸翻译 + 同声传译 合并进「翻译」tab，经子页切换
+    expect(popupHtml).toContain('id="tab-translate"');
+    expect(popupHtml).toContain('title="翻译"');
+    expect(popupHtml).toContain('data-translate-sub="immersive"');
+    expect(popupHtml).toContain('data-translate-sub="simultaneous"');
   });
 
   it('contains command panels for page translation and live interpretation controls', () => {
