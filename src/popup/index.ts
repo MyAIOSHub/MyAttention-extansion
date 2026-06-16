@@ -655,6 +655,16 @@ function handleSimulcastUpdate(
   const subtitle = message?.subtitle;
   const text = typeof subtitle?.text === 'string' ? subtitle.text.trim() : '';
   const statusMessage = message?.status?.message?.trim();
+
+  // 文件/链接转写自动收尾（offscreen 在播放结束时下发）→ 回到空闲态
+  if (transcribeActive && statusMessage && statusMessage.includes('转写完成')) {
+    transcribeActive = false;
+    updateTranscribeControls();
+    setTranscribeStatus(statusMessage, 'success');
+    sendResponse({ status: 'ok' });
+    return;
+  }
+
   if (statusMessage) {
     setTranslationStatus(
       'simulcast-status',
@@ -981,6 +991,25 @@ function setTranscribeStatus(text: string, kind: 'info' | 'success' | 'error'): 
   el.classList.add(kind === 'error' ? 'text-red-500' : kind === 'success' ? 'text-green-600' : 'text-gray-500');
 }
 
+/**
+ * 按来源/状态更新转写按钮：
+ * - 标签页/麦克风=实时 → 开始 + 停止
+ * - 文件/链接=一次性(自动收尾) → 仅一个按钮，运行中显示「取消」，隐藏停止
+ */
+function updateTranscribeControls(): void {
+  const stopBtn = document.getElementById('transcribe-stop-btn');
+  const startLabel = document.getElementById('transcribe-start-label');
+  const startIcon = document.getElementById('transcribe-start-icon');
+  const isMedia = transcribeSource === 'file' || transcribeSource === 'url';
+  stopBtn?.classList.toggle('hidden', isMedia);
+  if (startLabel) {
+    startLabel.textContent = isMedia && transcribeActive ? '取消' : '开始转写';
+  }
+  if (startIcon) {
+    startIcon.className = `fas ${isMedia && transcribeActive ? 'fa-xmark' : 'fa-circle text-[8px]'}`;
+  }
+}
+
 async function handleTranscribeStartClick(): Promise<void> {
   try {
     setTranscribeStatus('正在准备转写会话...', 'info');
@@ -1059,11 +1088,14 @@ async function handleTranscribeStartClick(): Promise<void> {
     }
 
     transcribeActive = true;
-    setTranscribeStatus('转写进行中：正在捕获标签页音频…', 'success');
+    updateTranscribeControls();
+    const isMedia = transcribeSource === 'file' || transcribeSource === 'url';
+    setTranscribeStatus(isMedia ? '转写中：正在播放并识别（实时进度）…' : '转写进行中：正在捕获音频…', 'success');
     const meta = document.getElementById('transcribe-meta');
-    if (meta) meta.textContent = '录制中…';
+    if (meta) meta.textContent = isMedia ? '转写中…' : '录制中…';
   } catch (error) {
     transcribeActive = false;
+    updateTranscribeControls();
     setTranscribeStatus(getErrorMessage(error), 'error');
   }
 }
@@ -1080,6 +1112,7 @@ async function handleTranscribeStopClick(): Promise<void> {
     setTranscribeStatus(getErrorMessage(error), 'error');
   } finally {
     transcribeActive = false;
+    updateTranscribeControls();
   }
 }
 
@@ -1286,7 +1319,12 @@ function initializeTranslationActions(): void {
   });
 
   document.getElementById('transcribe-start-btn')?.addEventListener('click', () => {
-    void handleTranscribeStartClick();
+    // 文件/链接运行中 → 该按钮即「取消」
+    if ((transcribeSource === 'file' || transcribeSource === 'url') && transcribeActive) {
+      void handleTranscribeStopClick();
+    } else {
+      void handleTranscribeStartClick();
+    }
   });
   document.getElementById('transcribe-stop-btn')?.addEventListener('click', () => {
     void handleTranscribeStopClick();
@@ -1315,8 +1353,10 @@ function initializeTranslationActions(): void {
       });
       document.getElementById('transcribe-file')?.classList.toggle('hidden', source !== 'file');
       document.getElementById('transcribe-url')?.classList.toggle('hidden', source !== 'url');
+      updateTranscribeControls();
     });
   });
+  updateTranscribeControls();
 }
 
 function renderRuntimeDiagnostics(viewModel: RuntimeDiagnosticsViewModel): void {
