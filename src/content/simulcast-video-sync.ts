@@ -135,9 +135,41 @@ export function isVideoSyncActive(): boolean {
   return state !== null;
 }
 
-/** 注册 simulcast:syncVideo 监听（仅顶层页面调用）。 */
+/** 主视频是否正在播放（用于自动同传）。 */
+function isMainVideoPlaying(): boolean {
+  const v = findMainVideo();
+  return !!v && !v.paused && !v.ended && v.readyState > 2;
+}
+
+/**
+ * 监听页面视频「开始播放」→ 通知 popup（自动同传用）。
+ * 节流：每个播放事件最多 1.5s 上报一次，避免 seek/缓冲反复触发。
+ */
+function initVideoPlayingNotifier(): void {
+  let lastSent = 0;
+  const notify = (): void => {
+    const now = Date.now();
+    if (now - lastSent < 1500) return;
+    if (!isMainVideoPlaying()) return;
+    lastSent = now;
+    try {
+      chrome.runtime.sendMessage({ type: 'simulcast:videoPlaying' });
+    } catch {
+      // popup 未打开/上下文失效：忽略
+    }
+  };
+  // 捕获阶段监听所有 <video> 的 play（含动态插入的）
+  document.addEventListener('play', notify, true);
+}
+
+/** 注册 simulcast:syncVideo / queryVideoPlaying 监听 + 播放通知（仅顶层页面调用）。 */
 export function initSimulcastVideoSyncListener(): void {
+  initVideoPlayingNotifier();
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    if (message?.type === 'simulcast:queryVideoPlaying') {
+      sendResponse({ status: 'ok', playing: isMainVideoPlaying() });
+      return true;
+    }
     if (!message || message.type !== 'simulcast:syncVideo') {
       return undefined;
     }

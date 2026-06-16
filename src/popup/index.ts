@@ -860,13 +860,11 @@ async function handleSimulcastStartClick(): Promise<void> {
       'success'
     );
 
-    // 音画同步：开启则延迟主视频对齐译音
+    // 音画同步：开局不盲目回退视频（会触发缓冲卡顿且白等），
+    // 待首条译文到达、实测真实延迟后再对齐（见 maybeAutoMeasureSyncDelay）。
     simulcastRunning = true;
     simulcastStartWall = Date.now();
     simulcastSyncMeasured = false;
-    if (isSimulcastSyncOn()) {
-      void sendVideoSync(true, getSyncDelaySec());
-    }
   } catch (error) {
     setTranslationStatus('simulcast-status', getErrorMessage(error), 'error');
   }
@@ -897,8 +895,49 @@ let simulcastRunning = false;
 let simulcastStartWall = 0;
 let simulcastSyncMeasured = false;
 
-function isSimulcastSyncOn(): boolean {
-  return true; // 默认始终开启，不暴露开关给用户
+// 自动同传：开关持久化 + 触发去抖
+const AUTO_SIMULCAST_STORAGE_KEY = 'simulcastAutoStart';
+let autoSimulcastEnabled = false;
+let autoSimulcastBusy = false;
+
+/** 满足条件则自动开始同传：开关打开、未在运行、凭据齐全。 */
+async function maybeAutoStartSimulcast(): Promise<void> {
+  if (!autoSimulcastEnabled || simulcastRunning || autoSimulcastBusy) return;
+  // 凭据未填则不自动启动（避免反复弹错）
+  const hasApiKey = !!getControlValue('simulcast-api-key', '').trim();
+  const hasLegacy =
+    !!getControlValue('simulcast-app-id', '').trim() &&
+    !!getControlValue('simulcast-access-token', '').trim();
+  if (!hasApiKey && !hasLegacy) return;
+  autoSimulcastBusy = true;
+  try {
+    await handleSimulcastStartClick();
+  } finally {
+    autoSimulcastBusy = false;
+  }
+}
+
+/** 收到内容脚本「视频开始播放」通知 → 尝试自动同传。 */
+function handleSimulcastVideoPlaying(
+  _message: unknown,
+  sendResponse: (response: { status: 'ok' }) => void
+): void {
+  sendResponse({ status: 'ok' });
+  void maybeAutoStartSimulcast();
+}
+
+/** popup 打开时：若开关开启且当前页视频正在播放，则自动同传。 */
+async function queryActiveTabAndMaybeAutoStart(): Promise<void> {
+  if (!autoSimulcastEnabled) return;
+  try {
+    const resp = await sendMessageToActiveTab<{ playing?: boolean }>({
+      type: 'simulcast:queryVideoPlaying',
+    });
+    const playing = resp?.playing ?? resp?.data?.playing;
+    if (playing) void maybeAutoStartSimulcast();
+  } catch {
+    // 当前页无内容脚本/未响应：忽略
+  }
 }
 
 function getSyncDelaySec(): number {
@@ -960,7 +999,9 @@ function maybeAutoMeasureSyncDelay(startTimeMs: number | undefined): void {
   // +0.3s TTS 余量；夹 0.5–8s，0.5s 步进
   const latency = Math.min(8, Math.max(0.5, elapsedSec - sourceSec + 0.3));
   const delaySec = Math.round(latency * 2) / 2;
-  if (Math.abs(delaySec - getSyncDelaySec()) < 0.5) return; // 变化不大不重调
+  // 首条译文：无条件按实测延迟对齐一次；之后变化 <0.5s 不重调，避免频繁 seek
+  if (simulcastSyncMeasured && Math.abs(delaySec - getSyncDelaySec()) < 0.5) return;
+  simulcastSyncMeasured = true;
   const slider = document.getElementById('simulcast-sync-delay') as HTMLInputElement | null;
   const val = document.getElementById('simulcast-sync-delay-val');
   if (slider) slider.value = String(delaySec);
@@ -2029,6 +2070,7 @@ function setupMessageListeners() {
       settingsUpdated: handleSettingsUpdated,
       'simulcast:update': handleSimulcastUpdate,
       'simulcast:popupUpdate': handleSimulcastUpdate,
+      'simulcast:videoPlaying': handleSimulcastVideoPlaying,
     };
 
     const handler = typeof messageType === 'string' ? asyncHandlers[messageType] : undefined;
@@ -2680,6 +2722,20 @@ function initializeSimulcastSettings(): void {
     ) as HTMLInputElement | null;
     if (voiceCloneToggle) {
       voiceCloneToggle.checked = simulcast.voiceCloneEnabled;
+    }
+
+    // 自动同传开关：持久化 + 打开页面时若视频在播放则自动启动
+    const autoToggle = document.getElementById('simulcast-auto-toggle') as HTMLInputElement | null;
+    if (autoToggle) {
+      const stored = await chrome.storage.local.get(AUTO_SIMULCAST_STORAGE_KEY);
+      autoSimulcastEnabled = stored?.[AUTO_SIMULCAST_STORAGE_KEY] === true;
+      autoToggle.checked = autoSimulcastEnabled;
+      autoToggle.addEventListener('change', () => {
+        autoSimulcastEnabled = autoToggle.checked;
+        void chrome.storage.local.set({ [AUTO_SIMULCAST_STORAGE_KEY]: autoSimulcastEnabled });
+        if (autoSimulcastEnabled) void queryActiveTabAndMaybeAutoStart();
+      });
+      if (autoSimulcastEnabled) void queryActiveTabAndMaybeAutoStart();
     }
   })();
 }

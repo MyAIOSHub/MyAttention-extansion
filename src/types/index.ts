@@ -60,6 +60,8 @@ export type KnownChromeMessageType =
   | 'simulcast:offscreenStart'
   | 'simulcast:offscreenStop'
   | 'simulcast:syncVideo'
+  | 'simulcast:videoPlaying'
+  | 'simulcast:queryVideoPlaying'
   | 'reportContentRuntime'
   | 'getTabRuntimeStatus'
   | 'getLocalStoreStatus'
