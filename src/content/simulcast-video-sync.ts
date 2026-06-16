@@ -1,10 +1,14 @@
 /**
- * 同声传译音画同步：把页面主视频延迟 N 秒并静音原声，使其与滞后的译音对齐。
+ * 同声传译音画同步：把页面主视频延迟 N 秒，使其与滞后的译音对齐。
  * 译音天然滞后 N（AST 翻译+TTS），无法追上实时画面 → 只能延迟视频来对齐。
  *
  * - 点播(VOD)：currentTime 回退 N 秒。
  * - 直播(live)：暂停缓冲 N 秒后续播（退到 live edge 之后 N）。
  * 内容脚本运行在页面里，直接控制 <video>；译音由 offscreen 实时播放。
+ *
+ * 注意：不可对 <video> 设 muted——标签页捕获抓取的正是该视频音频，
+ * muted 会让捕获到的样本变静音、AST 收不到声音。原声对用户的静音由标签页
+ * 捕获本身完成（offscreen 按 originalVolume/输出模式 决定是否回放原声）。
  */
 
 export type SyncMode = 'vod' | 'live' | 'none';
@@ -17,7 +21,6 @@ export interface VideoSyncResult {
 
 interface SyncState {
   video: HTMLVideoElement;
-  origMuted: boolean;
   delaySec: number;
   mode: SyncMode;
   cleanup: () => void;
@@ -84,15 +87,13 @@ function applyDelay(video: HTMLVideoElement, delaySec: number): SyncMode {
   return 'vod';
 }
 
-/** 开启音画同步：静音原声 + 延迟主视频。重复调用先还原再应用。 */
+/** 开启音画同步：延迟主视频（不静音，见文件头注释）。重复调用先还原再应用。 */
 export function enableVideoSync(delaySec: number): VideoSyncResult {
   disableVideoSync();
   const video = findMainVideo();
   if (!video) {
     return { videoFound: false, mode: 'none', reason: '未找到主视频' };
   }
-  const origMuted = video.muted;
-  video.muted = true;
   const mode = applyDelay(video, delaySec);
 
   // watchdog：换源/重新播放后重对齐（VOD）
@@ -104,7 +105,6 @@ export function enableVideoSync(delaySec: number): VideoSyncResult {
   video.addEventListener('loadeddata', onPlay);
   state = {
     video,
-    origMuted,
     delaySec,
     mode,
     cleanup: () => video.removeEventListener('loadeddata', onPlay),
@@ -123,11 +123,10 @@ export function reapplyVideoSync(delaySec: number): VideoSyncResult {
   return enableVideoSync(delaySec);
 }
 
-/** 关闭音画同步：还原静音，清理监听（不前进视频，保留当前位置）。 */
+/** 关闭音画同步：清理监听（不前进视频，保留当前位置）。 */
 export function disableVideoSync(): void {
   if (!state) return;
   state.cleanup();
-  state.video.muted = state.origMuted;
   state = null;
 }
 

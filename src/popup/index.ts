@@ -888,7 +888,7 @@ async function handleSimulcastStopClick(): Promise<void> {
     setTranslationStatus('simulcast-status', getErrorMessage(error), 'error');
   } finally {
     simulcastRunning = false;
-    void sendVideoSync(false, 0); // 还原视频静音/延迟
+    void sendVideoSync(false, 0); // 还原视频延迟
   }
 }
 

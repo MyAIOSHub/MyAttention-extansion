@@ -78,12 +78,12 @@ describe('simulcast-video-sync helpers', () => {
   });
 
   describe('enable / disable', () => {
-    it('VOD: mutes and seeks back, restores mute on disable', () => {
+    it('VOD: seeks back without muting (tab capture needs the video audio)', () => {
       const v = makeVideo({ w: 640, h: 360, duration: 600, currentTime: 100 });
       v.muted = false;
       const res = enableVideoSync(3);
       expect(res).toEqual({ videoFound: true, mode: 'vod' });
-      expect(v.muted).toBe(true);
+      expect(v.muted).toBe(false); // 不静音：muted 会让标签页捕获到静音、AST 收不到声音
       expect(v.currentTime).toBe(97);
       expect(isVideoSyncActive()).toBe(true);
       disableVideoSync();
