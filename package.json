@@ -7,7 +7,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite build --mode development --watch",
-    "build": "vite build --mode production && vite build --mode production --config vite.content.config.ts && npm run verify:sw && npm run verify:content-script",
+    "build": "vite build --mode production && vite build --mode production --config vite.content.config.ts && npm run verify:sw && npm run verify:content-script && npm run prefill:local",
     "build:chrome": "npm run build && node scripts/build.js",
     "verify:sw": "node scripts/verify-sw-build.js",
     "verify:content-script": "node scripts/verify-content-script-build.js",

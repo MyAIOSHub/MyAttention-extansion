@@ -65,6 +65,12 @@ function compactObject(value) {
   );
 }
 
+if (!existsSync(ENV_PATH)) {
+  // 无 .env.local（CI / 其他开发者 / 生产构建）时安全跳过，不报错
+  console.log(JSON.stringify({ status: 'skipped', reason: '.env.local not found' }));
+  process.exit(0);
+}
+
 const env = parseEnvFile(ENV_PATH);
 const prefill = {
   llmApi: compactObject({
