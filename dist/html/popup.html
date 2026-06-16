@@ -1605,89 +1605,94 @@
     <div id="transcribe-content" class="tab-content hidden flex-1 flex flex-col p-2">
       <div class="mb-3">
         <h2 class="text-sm font-semibold text-gray-800">转写</h2>
-        <p class="text-xs text-gray-500">捕获当前标签页音频，实时转成文字</p>
+        <p class="text-xs text-gray-500">捕获 标签页 / 麦克风 / 文件 / 链接 音频，实时转成文字</p>
       </div>
 
-      <div class="bg-white rounded-lg shadow-sm border border-gray-100 p-3 mb-3 flex-shrink-0">
-        <!-- 来源 -->
-        <label class="block text-xs font-medium text-gray-600 mb-1">来源</label>
-        <div class="grid grid-cols-2 gap-1 mb-2 p-0.5 bg-gray-100 rounded-lg">
-          <button id="transcribe-source-tab" type="button" class="transcribe-source-btn active px-2 py-1.5 text-xs rounded-md" data-source="tab">
-            <i class="fas fa-display mr-1"></i>标签页
-          </button>
-          <button id="transcribe-source-mic" type="button" class="transcribe-source-btn px-2 py-1.5 text-xs rounded-md" data-source="mic">
-            <i class="fas fa-microphone mr-1"></i>麦克风
-          </button>
-          <button id="transcribe-source-file" type="button" class="transcribe-source-btn px-2 py-1.5 text-xs rounded-md" data-source="file">
-            <i class="fas fa-file-audio mr-1"></i>文件
-          </button>
-          <button id="transcribe-source-url" type="button" class="transcribe-source-btn px-2 py-1.5 text-xs rounded-md" data-source="url">
-            <i class="fas fa-link mr-1"></i>链接
-          </button>
-        </div>
-        <input id="transcribe-file" type="file" accept="audio/*,video/*" class="hidden w-full text-xs mb-2 file:mr-2 file:rounded file:border-0 file:bg-gray-100 file:px-2 file:py-1 file:text-xs">
-        <input id="transcribe-url" type="url" placeholder="直链音视频 URL（mp3/mp4/wav/m4a）" class="hidden w-full text-sm border border-gray-200 rounded-lg px-2 py-2 mb-2">
+      <!-- 来源：4-tab 置顶 -->
+      <div class="grid grid-cols-4 gap-1 mb-2 p-0.5 bg-gray-100 rounded-lg flex-shrink-0">
+        <button id="transcribe-source-tab" type="button" class="transcribe-source-btn active px-2 py-1.5 text-xs rounded-md" data-source="tab">
+          <i class="fas fa-display mr-1"></i>标签页
+        </button>
+        <button id="transcribe-source-mic" type="button" class="transcribe-source-btn px-2 py-1.5 text-xs rounded-md" data-source="mic">
+          <i class="fas fa-microphone mr-1"></i>麦克风
+        </button>
+        <button id="transcribe-source-file" type="button" class="transcribe-source-btn px-2 py-1.5 text-xs rounded-md" data-source="file">
+          <i class="fas fa-file-audio mr-1"></i>文件
+        </button>
+        <button id="transcribe-source-url" type="button" class="transcribe-source-btn px-2 py-1.5 text-xs rounded-md" data-source="url">
+          <i class="fas fa-link mr-1"></i>链接
+        </button>
+      </div>
+      <input id="transcribe-file" type="file" accept="audio/*,video/*" class="hidden w-full text-xs mb-2 file:mr-2 file:rounded file:border-0 file:bg-gray-100 file:px-2 file:py-1 file:text-xs flex-shrink-0">
+      <input id="transcribe-url" type="url" placeholder="直链音视频 URL（mp3/mp4/wav/m4a）" class="hidden w-full text-sm border border-gray-200 rounded-lg px-2 py-2 mb-2 flex-shrink-0">
 
-        <div class="grid grid-cols-2 gap-2">
-          <div>
-            <label class="block text-xs font-medium text-gray-600 mb-1">语言</label>
-            <select id="transcribe-source-language" class="w-full text-sm border border-gray-200 rounded-lg px-2 py-2 bg-white">
-              <option value="auto">自动检测</option>
-              <option value="zh-CN">中文</option>
-              <option value="en">英语</option>
-              <option value="ja">日语</option>
-              <option value="ko">韩语</option>
-            </select>
-          </div>
-          <div class="flex items-end gap-2">
-            <button id="transcribe-start-btn" class="flex-1 py-2 text-xs font-medium btn-brand text-white rounded-lg hover:btn-brand transition-colors flex items-center justify-center gap-2">
-              <i id="transcribe-start-icon" class="fas fa-circle text-[8px]"></i><span id="transcribe-start-label">开始转写</span>
+      <!-- 开始/停止 置顶 -->
+      <div class="grid grid-cols-2 gap-2 mb-2 flex-shrink-0">
+        <button id="transcribe-start-btn" class="py-2 text-xs font-medium btn-brand text-white rounded-lg hover:btn-brand transition-colors flex items-center justify-center gap-2">
+          <i id="transcribe-start-icon" class="fas fa-circle text-[8px]"></i><span id="transcribe-start-label">开始转写</span>
+        </button>
+        <button id="transcribe-stop-btn" class="py-2 text-xs font-medium bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors flex items-center justify-center gap-2">
+          <i class="fas fa-stop text-[10px]"></i>停止
+        </button>
+      </div>
+
+      <div id="transcribe-status" class="text-xs text-gray-500 mb-2 hidden flex-shrink-0"></div>
+
+      <!-- 实时转写结果 -->
+      <div class="bg-white border border-gray-100 rounded-lg p-3 mb-3 flex-1 min-h-0 flex flex-col">
+        <div class="flex items-center justify-between mb-2 flex-wrap gap-1 flex-shrink-0">
+          <span class="text-xs text-gray-400" id="transcribe-meta">尚未开始</span>
+          <div class="flex items-center gap-1">
+            <button id="transcribe-copy-btn" class="text-xs text-gray-600 hover:bg-gray-100 px-2 py-1 rounded transition-colors" title="复制全文">
+              <i class="fas fa-copy"></i>
             </button>
-            <button id="transcribe-stop-btn" class="flex-1 py-2 text-xs font-medium bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors flex items-center justify-center gap-2">
-              <i class="fas fa-stop text-[10px]"></i>停止
+            <button id="transcribe-export-txt" class="text-xs text-gray-600 hover:bg-gray-100 px-2 py-1 rounded transition-colors" title="导出 txt">txt</button>
+            <button id="transcribe-export-srt" class="text-xs text-gray-600 hover:bg-gray-100 px-2 py-1 rounded transition-colors" title="导出 srt">srt</button>
+            <button id="transcribe-export-md" class="text-xs text-gray-600 hover:bg-gray-100 px-2 py-1 rounded transition-colors" title="导出 md">md</button>
+            <button id="transcribe-edit-btn" class="text-xs text-gray-600 hover:bg-gray-100 px-2 py-1 rounded transition-colors" title="编辑">
+              <i class="fas fa-pen"></i>
+            </button>
+            <button id="transcribe-save-btn" class="text-xs text-brand hover:bg-brand-light px-2 py-1 rounded transition-colors" title="存为记录">
+              <i class="fas fa-bookmark mr-1"></i>存记录
             </button>
           </div>
         </div>
-        <p class="text-xs text-gray-400 mt-2">凭据复用「同声传译」页配置的火山 AST Key。</p>
-      </div>
 
-      <div id="transcribe-status" class="text-xs text-gray-500 mb-2 hidden"></div>
+        <!-- 回放条（转写完成后出现） -->
+        <div id="transcribe-playback" class="hidden mb-2 bg-gray-50 rounded-lg border border-gray-200 p-2 flex-shrink-0">
+          <div class="flex items-center gap-2 mb-1">
+            <i class="fas fa-headphones text-xs text-gray-500"></i>
+            <span class="text-xs text-gray-500">录音回放 · 点分段跳转</span>
+          </div>
+          <audio id="transcribe-audio" controls class="w-full h-8"></audio>
+        </div>
 
-      <!-- 操作 -->
-      <div class="flex items-center justify-between mb-2 flex-wrap gap-1">
-        <span class="text-xs text-gray-400" id="transcribe-meta">尚未开始</span>
-        <div class="flex items-center gap-1">
-          <button id="transcribe-copy-btn" class="text-xs text-gray-600 hover:bg-gray-100 px-2 py-1 rounded transition-colors" title="复制全文">
-            <i class="fas fa-copy"></i>
-          </button>
-          <button id="transcribe-export-txt" class="text-xs text-gray-600 hover:bg-gray-100 px-2 py-1 rounded transition-colors" title="导出 txt">txt</button>
-          <button id="transcribe-export-srt" class="text-xs text-gray-600 hover:bg-gray-100 px-2 py-1 rounded transition-colors" title="导出 srt">srt</button>
-          <button id="transcribe-export-md" class="text-xs text-gray-600 hover:bg-gray-100 px-2 py-1 rounded transition-colors" title="导出 md">md</button>
-          <button id="transcribe-edit-btn" class="text-xs text-gray-600 hover:bg-gray-100 px-2 py-1 rounded transition-colors" title="编辑">
-            <i class="fas fa-pen"></i>
-          </button>
-          <button id="transcribe-save-btn" class="text-xs text-brand hover:bg-brand-light px-2 py-1 rounded transition-colors" title="存为记录">
-            <i class="fas fa-bookmark mr-1"></i>存记录
-          </button>
+        <div id="transcribe-segments" class="flex-1 min-h-0 overflow-y-auto space-y-2 text-sm">
+          <div id="transcribe-empty" class="h-full flex flex-col items-center justify-center text-center text-gray-400">
+            <i class="fas fa-closed-captioning text-3xl mb-2"></i>
+            <p class="text-xs">点击「开始转写」捕获标签页 / 麦克风 / 文件 / 链接音频</p>
+          </div>
         </div>
       </div>
 
-      <!-- 回放条（转写完成后出现） -->
-      <div id="transcribe-playback" class="hidden mb-2 bg-white rounded-lg border border-gray-200 p-2">
-        <div class="flex items-center gap-2 mb-1">
-          <i class="fas fa-headphones text-xs text-gray-500"></i>
-          <span class="text-xs text-gray-500">录音回放 · 点分段跳转</span>
+      <!-- 设置（默认收起：语言 / 凭据） -->
+      <details class="bg-white rounded-lg shadow-sm border border-gray-100 mb-3 flex-shrink-0">
+        <summary class="cursor-pointer select-none px-3 py-2 text-sm font-medium text-gray-700 flex items-center gap-2">
+          <i class="fas fa-cog text-xs text-gray-500"></i>
+          <span>设置（语言 / 凭据）</span>
+        </summary>
+        <div class="px-3 pb-3">
+          <label class="block text-xs font-medium text-gray-600 mb-1">语言</label>
+          <select id="transcribe-source-language" class="w-full text-sm border border-gray-200 rounded-lg px-2 py-2 bg-white">
+            <option value="auto">自动检测</option>
+            <option value="zh-CN">中文</option>
+            <option value="en">英语</option>
+            <option value="ja">日语</option>
+            <option value="ko">韩语</option>
+          </select>
+          <p class="text-xs text-gray-400 mt-2">凭据复用「同声传译」页配置的火山 AST Key。</p>
         </div>
-        <audio id="transcribe-audio" controls class="w-full h-8"></audio>
-      </div>
-
-      <!-- 转写结果 -->
-      <div id="transcribe-segments" class="flex-1 min-h-0 overflow-y-auto bg-white rounded-lg border border-gray-200 p-3 space-y-2 text-sm">
-        <div id="transcribe-empty" class="h-full flex flex-col items-center justify-center text-center text-gray-400">
-          <i class="fas fa-closed-captioning text-3xl mb-2"></i>
-          <p class="text-xs">点击「开始转写」捕获当前标签页音频</p>
-        </div>
-      </div>
+      </details>
     </div>
 
     <!-- 设置标签页 -->
