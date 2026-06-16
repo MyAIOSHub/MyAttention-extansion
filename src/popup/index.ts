@@ -908,7 +908,7 @@ let simulcastStartWall = 0;
 let simulcastSyncMeasured = false;
 
 function isSimulcastSyncOn(): boolean {
-  return (document.getElementById('simulcast-sync-toggle') as HTMLInputElement | null)?.checked === true;
+  return true; // 默认始终开启，不暴露开关给用户
 }
 
 function getSyncDelaySec(): number {
@@ -963,9 +963,8 @@ async function sendVideoSync(
  * 仅当 L 与当前延迟差 ≥0.5s 才重调，避免频繁 seek。
  */
 function maybeAutoMeasureSyncDelay(startTimeMs: number | undefined): void {
-  if (!simulcastRunning || !isSimulcastSyncOn() || simulcastStartWall === 0) return;
-  const auto = (document.getElementById('simulcast-sync-auto') as HTMLInputElement | null)?.checked;
-  if (!auto || typeof startTimeMs !== 'number') return;
+  if (!simulcastRunning || simulcastStartWall === 0) return;
+  if (typeof startTimeMs !== 'number') return;
   const elapsedSec = (Date.now() - simulcastStartWall) / 1000;
   const sourceSec = startTimeMs / 1000;
   // +0.3s TTS 余量；夹 0.5–8s，0.5s 步进
@@ -1316,29 +1315,6 @@ function initializeTranslationActions(): void {
 
   document.getElementById('simulcast-stop-btn')?.addEventListener('click', () => {
     void handleSimulcastStopClick();
-  });
-
-  // 音画同步控件
-  const syncToggle = document.getElementById('simulcast-sync-toggle') as HTMLInputElement | null;
-  syncToggle?.addEventListener('change', () => {
-    const on = syncToggle.checked;
-    document.getElementById('simulcast-sync-controls')?.classList.toggle('hidden', !on);
-    if (simulcastRunning) {
-      void sendVideoSync(on, getSyncDelaySec());
-    } else if (!on) {
-      setSimulcastSyncStatus('');
-    }
-  });
-  const syncDelay = document.getElementById('simulcast-sync-delay') as HTMLInputElement | null;
-  syncDelay?.addEventListener('input', () => {
-    const val = document.getElementById('simulcast-sync-delay-val');
-    if (val) val.textContent = `${getSyncDelaySec().toFixed(1)}s`;
-  });
-  syncDelay?.addEventListener('change', () => {
-    if (simulcastRunning && isSimulcastSyncOn()) {
-      simulcastSyncMeasured = true; // 手动调过后不再自动覆盖
-      void sendVideoSync(true, getSyncDelaySec());
-    }
   });
 
   document.getElementById('transcribe-start-btn')?.addEventListener('click', () => {
