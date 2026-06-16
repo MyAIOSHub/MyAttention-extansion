@@ -470,7 +470,7 @@ export function loadFontAwesome(): void {
  */
 export function createLogoHTML(size = '20px'): string {
   try {
-    const iconUrl = getSafeRuntimeUrl('icons/logo.svg');
+    const iconUrl = getSafeRuntimeUrl('icons/logo_128.png');
     if (!iconUrl) {
       return `<span class="sayso-badge"></span>`;
     }
