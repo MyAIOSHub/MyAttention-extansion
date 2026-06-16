@@ -870,6 +870,45 @@ function getImmersiveTranslationSettings(): {
   };
 }
 
+/** 划词工具栏：把 译/解 结果存为「记录」页的文字记录（翻译 / 提问）。 */
+async function saveTextRecord(
+  category: 'translation' | 'question',
+  sourceText: string,
+  resultText: string
+): Promise<void> {
+  const src = (sourceText || '').trim();
+  const result = (resultText || '').trim();
+  if (!src || !result) {
+    return;
+  }
+  const label = category === 'translation' ? '翻译' : '提问';
+  const url = location.href;
+  const title = `${label} · ${src.slice(0, 40)}`.slice(0, 120);
+  const body = category === 'translation' ? `${src}\n→ ${result}` : `${src}\n${result}`;
+  try {
+    await chromeMessageAdapter.sendMessage({
+      type: 'upsertSnippet',
+      snippet: {
+        dedupeKey: `${category}:${url}:${src.slice(0, 80)}`,
+        type: 'page_save',
+        captureMethod: 'context_menu_page',
+        selectionText: title,
+        contextText: body,
+        selectors: [],
+        url,
+        title,
+        domain: location.hostname || label,
+        sourceKind: 'web_page',
+        headingPath: [label],
+        rawContextMarkdown: body,
+        summaryText: result.slice(0, 200),
+      },
+    });
+  } catch {
+    // 存记录失败不影响划词主功能
+  }
+}
+
 async function translateSelectedText(text: string): Promise<string> {
   const settings = getImmersiveTranslationSettings();
   const response = await chromeMessageAdapter.sendMessage({
@@ -886,7 +925,9 @@ async function translateSelectedText(text: string): Promise<string> {
   }
 
   const translations = extractTranslationsFromResponse(response as ChromeMessageResponse<any>);
-  return translations[0]?.text || '';
+  const translation = translations[0]?.text || '';
+  void saveTextRecord('translation', text, translation); // 译 → 翻译记录
+  return translation;
 }
 
 async function explainSelectedTextForToolbar(text: string): Promise<string> {
@@ -903,7 +944,9 @@ async function explainSelectedTextForToolbar(text: string): Promise<string> {
     throw new Error(response.error || '解释失败');
   }
 
-  return response.explanation ?? response.data?.explanation ?? '';
+  const explanation = response.explanation ?? response.data?.explanation ?? '';
+  void saveTextRecord('question', text, explanation); // 解 → 提问记录
+  return explanation;
 }
 
 function speakSelectedText(text: string): void {

@@ -924,6 +924,48 @@ async function handleSimulcastStopClick(): Promise<void> {
     overlaySource = '';
     overlayTranslation = '';
     sendSubtitleToVideo(true); // 清除视频上字幕
+    void saveSimulcastTranslationRecord(); // 同传 → 翻译记录
+  }
+}
+
+/** 同传停止时，把累计的原文/译文存为「记录」页的翻译记录。 */
+async function saveSimulcastTranslationRecord(): Promise<void> {
+  const sources = simulcastSpeakerSegments.filter((s) => s.channel === 'source');
+  const translations = simulcastSpeakerSegments.filter((s) => s.channel === 'translation');
+  if (!sources.length && !translations.length) {
+    return;
+  }
+  const body = sources
+    .map((s, i) => `${s.text}\n→ ${translations[i]?.text ?? ''}`.trim())
+    .join('\n\n');
+  if (!body.trim()) {
+    return;
+  }
+  const first = (sources[0]?.text || translations[0]?.text || '同传').slice(0, 40);
+  const title = `翻译 · ${first}`.slice(0, 120);
+  try {
+    const activeTab = await getActiveTab();
+    const url = activeTab?.url || '';
+    await safeSendRuntimeMessage({
+      type: 'upsertSnippet',
+      snippet: {
+        dedupeKey: `translation:simulcast:${url}`,
+        type: 'page_save',
+        captureMethod: 'context_menu_page',
+        selectionText: title,
+        contextText: body,
+        selectors: [],
+        url,
+        title,
+        domain: url ? new URL(url).hostname : 'translation',
+        sourceKind: 'web_page',
+        headingPath: ['翻译'],
+        rawContextMarkdown: body,
+        summaryText: (translations[0]?.text || '').slice(0, 200),
+      },
+    });
+  } catch {
+    // 存记录失败不影响停止
   }
 }
 
