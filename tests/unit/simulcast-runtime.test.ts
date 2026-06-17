@@ -156,6 +156,27 @@ describe('SimulcastRuntime', () => {
     expect(runtime.getStatus()).toEqual({ state: 'stopped' });
   });
 
+  it('updates playback volumes in the active offscreen session', async () => {
+    const { dependencies, runtime } = createRuntime();
+
+    await runtime.start(baseRequest);
+    const result = await runtime.updatePlaybackSettings({
+      tabId: 42,
+      originalVolume: 0,
+      translatedVolume: 0.4,
+      translatedAudioDelayMs: 300,
+    });
+
+    expect(result.state).toBe('capturing');
+    expect(dependencies.sendRuntimeMessage).toHaveBeenLastCalledWith({
+      type: 'simulcast:offscreenUpdatePlayback',
+      tabId: 42,
+      originalVolume: 0,
+      translatedVolume: 0.4,
+      translatedAudioDelayMs: 300,
+    });
+  });
+
   it('removes AST auth rule when startup fails after installing headers', async () => {
     const { dependencies, runtime } = createRuntime({
       getTabMediaStreamId: vi.fn().mockRejectedValue(new Error('tab capture denied')),

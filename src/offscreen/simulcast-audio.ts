@@ -38,9 +38,25 @@ interface SimulcastOffscreenStopMessage {
   tabId?: number;
 }
 
+interface SimulcastOffscreenUpdatePlaybackMessage {
+  type: 'simulcast:offscreenUpdatePlayback';
+  tabId?: number;
+  originalVolume?: number;
+  translatedVolume?: number;
+  translatedAudioDelayMs?: number;
+}
+
+interface SimulcastTranslatedAudioPlaybackEvent {
+  event: 'playback-started' | 'playback-ended';
+  segmentId: number;
+  wallTimeMs: number;
+  delayMs: number;
+}
+
 type SimulcastOffscreenMessage =
   | SimulcastOffscreenStartMessage
-  | SimulcastOffscreenStopMessage;
+  | SimulcastOffscreenStopMessage
+  | SimulcastOffscreenUpdatePlaybackMessage;
 
 declare global {
   interface Window {
@@ -54,8 +70,12 @@ let activeSource: AudioNode | null = null;
 let activeOriginalGain: GainNode | null = null;
 let activeProcessor: ScriptProcessorNode | null = null;
 let activeAstSession: VolcengineAstSession | null = null;
+let activeSession: SimulcastOffscreenStartMessage['session'] | null = null;
 let ttsChunks: Uint8Array[] = [];
+let nextTtsSegmentId = 1;
+let activeTtsSegmentId = 0;
 let activeTranslatedAudio: HTMLAudioElement | null = null;
+const activeTranslatedAudioUrls = new Map<HTMLAudioElement, string>();
 let activeTranslatedAudioTimers: number[] = [];
 // 转写录音（仅 recordAudio 会话）
 let activeRecorder: MediaRecorder | null = null;
@@ -143,6 +163,27 @@ function clearTranslatedAudioTimers(): void {
   activeTranslatedAudioTimers = [];
 }
 
+function cleanupTranslatedAudio(audio: HTMLAudioElement): void {
+  const url = activeTranslatedAudioUrls.get(audio);
+  if (url) {
+    URL.revokeObjectURL(url);
+  }
+  activeTranslatedAudioUrls.delete(audio);
+  if (activeTranslatedAudio === audio) {
+    activeTranslatedAudio = null;
+  }
+}
+
+function stopTranslatedAudios(): void {
+  activeTranslatedAudioUrls.forEach((url, audio) => {
+    audio.pause();
+    audio.src = '';
+    URL.revokeObjectURL(url);
+  });
+  activeTranslatedAudioUrls.clear();
+  activeTranslatedAudio = null;
+}
+
 function stopActiveCapture(): void {
   clearTranslatedAudioTimers();
   // 先收尾录音（在停轨前 stop，让 MediaRecorder 把缓冲刷出）
@@ -153,6 +194,7 @@ function stopActiveCapture(): void {
   activeAstSession?.finish();
   activeAstSession?.close();
   activeAstSession = null;
+  activeSession = null;
 
   activeSource?.disconnect();
   activeSource = null;
@@ -177,9 +219,10 @@ function stopActiveCapture(): void {
   void activeAudioContext?.close().catch(() => undefined);
   activeAudioContext = null;
 
-  activeTranslatedAudio?.pause();
-  activeTranslatedAudio = null;
+  stopTranslatedAudios();
   ttsChunks = [];
+  activeTtsSegmentId = 0;
+  nextTtsSegmentId = 1;
 }
 
 function createTabAudioConstraints(streamId: string): MediaStreamConstraints {
@@ -215,6 +258,33 @@ function getTranslatedPlaybackVolume(session: SimulcastOffscreenStartMessage['se
   return clampVolume(session.translatedVolume, 1);
 }
 
+function updateActivePlaybackSettings(
+  message: SimulcastOffscreenUpdatePlaybackMessage
+): { status: 'ok'; updated: boolean } {
+  const session = activeSession;
+  if (!session) {
+    return { status: 'ok', updated: false };
+  }
+  if (typeof message.tabId === 'number' && message.tabId !== session.tabId) {
+    return { status: 'ok', updated: false };
+  }
+
+  session.originalVolume = clampVolume(message.originalVolume, session.originalVolume);
+  session.translatedVolume = clampVolume(message.translatedVolume, session.translatedVolume);
+  session.translatedAudioDelayMs = normalizeSimulcastPlaybackDelayMs(
+    message.translatedAudioDelayMs ?? session.translatedAudioDelayMs
+  );
+
+  if (activeOriginalGain) {
+    activeOriginalGain.gain.value = getOriginalPlaybackVolume(session);
+  }
+  activeTranslatedAudioUrls.forEach((_, audio) => {
+    audio.volume = getTranslatedPlaybackVolume(session);
+  });
+
+  return { status: 'ok', updated: true };
+}
+
 function concatChunks(chunks: Uint8Array[]): Uint8Array {
   const length = chunks.reduce((total, chunk) => total + chunk.length, 0);
   const output = new Uint8Array(length);
@@ -227,17 +297,23 @@ function concatChunks(chunks: Uint8Array[]): Uint8Array {
 }
 
 function playTranslatedAudio(
+  segmentId: number,
   chunks: Uint8Array[],
-  volume: number,
+  getVolume: () => number,
   delayMs: number,
-  onPlaybackStatus?: (status: { kind: 'success' | 'error' | 'info'; message: string }) => void
+  onPlaybackStatus?: (status: { kind: 'success' | 'error' | 'info'; message: string }) => void,
+  onTranslatedAudio?: (event: SimulcastTranslatedAudioPlaybackEvent) => void
 ): void {
-  if (!chunks.length || volume <= 0) {
+  if (!chunks.length || getVolume() <= 0) {
     return;
   }
 
   const normalizedDelayMs = normalizeSimulcastPlaybackDelayMs(delayMs);
   const startPlayback = (): void => {
+    const volume = clampVolume(getVolume(), 1);
+    if (volume <= 0) {
+      return;
+    }
     const audioBytes = concatChunks(chunks);
     const audioBuffer = new ArrayBuffer(audioBytes.byteLength);
     new Uint8Array(audioBuffer).set(audioBytes);
@@ -246,22 +322,32 @@ function playTranslatedAudio(
     const audio = new Audio(url);
     audio.volume = clampVolume(volume, 1);
     audio.onended = (): void => {
-      URL.revokeObjectURL(url);
-      if (activeTranslatedAudio === audio) {
-        activeTranslatedAudio = null;
-      }
+      onTranslatedAudio?.({
+        event: 'playback-ended',
+        segmentId,
+        wallTimeMs: Date.now(),
+        delayMs: normalizedDelayMs,
+      });
+      cleanupTranslatedAudio(audio);
     };
     activeTranslatedAudio = audio;
+    activeTranslatedAudioUrls.set(audio, url);
     void audio
       .play()
       .then(() => {
+        onTranslatedAudio?.({
+          event: 'playback-started',
+          segmentId,
+          wallTimeMs: Date.now(),
+          delayMs: normalizedDelayMs,
+        });
         onPlaybackStatus?.({
           kind: 'success',
           message: '同声传译运行中：正在播放译音。',
         });
       })
       .catch((error) => {
-        URL.revokeObjectURL(url);
+        cleanupTranslatedAudio(audio);
         onPlaybackStatus?.({
           kind: 'error',
           message: `译音已返回，但浏览器播放失败：${error instanceof Error ? error.message : String(error)}`,
@@ -320,11 +406,14 @@ function createAstSession(message: SimulcastOffscreenStartMessage): VolcengineAs
       onEvent: (response): void => {
         if (response.event === VOLCENGINE_AST_EVENTS.TTSSentenceStart) {
           ttsChunks = [];
+          activeTtsSegmentId = nextTtsSegmentId++;
         }
         if (response.event === VOLCENGINE_AST_EVENTS.TTSSentenceEnd) {
+          const segmentId = activeTtsSegmentId || nextTtsSegmentId++;
           playTranslatedAudio(
+            segmentId,
             ttsChunks,
-            getTranslatedPlaybackVolume(message.session),
+            () => getTranslatedPlaybackVolume(message.session),
             normalizeSimulcastPlaybackDelayMs(message.session.translatedAudioDelayMs),
             (status) => {
               chrome.runtime.sendMessage({
@@ -333,9 +422,18 @@ function createAstSession(message: SimulcastOffscreenStartMessage): VolcengineAs
                 tabId: message.session.tabId,
                 status,
               });
+            },
+            (translatedAudio) => {
+              chrome.runtime.sendMessage({
+                type: 'simulcast:update',
+                target: 'background',
+                tabId: message.session.tabId,
+                translatedAudio,
+              });
             }
           );
           ttsChunks = [];
+          activeTtsSegmentId = 0;
         }
       },
     }
@@ -481,6 +579,7 @@ async function startCapture(message: SimulcastOffscreenStartMessage): Promise<{
   activeOriginalGain = originalGain ?? null;
   activeProcessor = processor;
   activeAstSession = astSession;
+  activeSession = session;
   activeMediaEl = mediaEl ?? null;
 
   return {
@@ -493,6 +592,11 @@ chrome.runtime.onMessage.addListener((message: SimulcastOffscreenMessage, sender
   if (message.type === 'simulcast:offscreenStop') {
     stopActiveCapture();
     sendResponse({ status: 'ok', stopped: true });
+    return true;
+  }
+
+  if (message.type === 'simulcast:offscreenUpdatePlayback') {
+    sendResponse(updateActivePlaybackSettings(message));
     return true;
   }
 

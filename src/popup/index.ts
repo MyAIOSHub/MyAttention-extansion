@@ -155,6 +155,13 @@ import {
   type SimulcastSpeakerSegment,
   type SimulcastSubtitleChannel,
 } from './simulcast-speaker-log';
+import {
+  createSimulcastDynamicSyncState,
+  observeSourceSubtitleAnchor,
+  observeTranslatedAudioPlayback,
+  resetSimulcastDynamicSyncState,
+  type SimulcastDynamicSyncSample,
+} from './simulcast-dynamic-sync';
 
 // ============================================================================
 // 类型定义
@@ -294,6 +301,23 @@ interface SimulcastUpdateMessage {
   audio?: {
     base64?: string;
     mime?: string;
+  };
+  translatedAudio?: {
+    event?: 'playback-started' | 'playback-ended';
+    segmentId?: number;
+    wallTimeMs?: number;
+    delayMs?: number;
+  };
+  videoClock?: {
+    mode?: string;
+    mediaTime?: number;
+    expectedDisplayTime?: number;
+    performanceNow?: number;
+    currentTime?: number;
+    playbackRate?: number;
+    paused?: boolean;
+    ended?: boolean;
+    presentedFrames?: number;
   };
   videoStopped?: boolean;
 }
@@ -665,7 +689,23 @@ function handleSimulcastUpdate(
 
   const subtitle = message?.subtitle;
   const text = typeof subtitle?.text === 'string' ? subtitle.text.trim() : '';
+  const event = subtitle?.event;
   const statusMessage = message?.status?.message?.trim();
+
+  if (message?.videoClock) {
+    simulcastLatestVideoClock = message.videoClock;
+  }
+
+  if (
+    simulcastRunning &&
+    event === VOLCENGINE_AST_EVENTS.SourceSubtitleStart
+  ) {
+    const sourceStartWallMs = Date.now();
+    observeSourceSubtitleAnchor(simulcastDynamicSyncState, sourceStartWallMs);
+    if (simulcastFirstSourceWall === 0) {
+      simulcastFirstSourceWall = sourceStartWallMs;
+    }
+  }
 
   // 文件/链接转写自动收尾（offscreen 在播放结束时下发）→ 回到空闲态
   if (transcribeActive && statusMessage && statusMessage.includes('转写完成')) {
@@ -687,6 +727,10 @@ function handleSimulcastUpdate(
     }
   }
 
+  if (message?.translatedAudio?.event === 'playback-started') {
+    handleTranslatedAudioPlaybackStarted(message.translatedAudio);
+  }
+
   if (message?.videoStopped) {
     resetSimulcastLocalState({ clearVideoSync: false, saveRecord: true });
     sendResponse({ status: 'ok' });
@@ -698,7 +742,6 @@ function handleSimulcastUpdate(
     return;
   }
 
-  const event = subtitle.event;
   if (typeof event !== 'number') {
     sendResponse({ status: 'ok' });
     return;
@@ -909,6 +952,8 @@ async function handleSimulcastStartClick(): Promise<void> {
     simulcastFirstSourceWall = 0;
     simulcastSyncMeasured = false;
     simulcastSyncMeasuredFrom = 'none';
+    resetSimulcastDynamicSyncState(simulcastDynamicSyncState);
+    simulcastLatestVideoClock = null;
     updateSimulcastControls();
   } catch (error) {
     if (simulcastVideoHoldPending) {
@@ -935,6 +980,8 @@ function resetSimulcastLocalState(options: {
 }): void {
   simulcastRunning = false;
   simulcastVideoHoldPending = false;
+  resetSimulcastDynamicSyncState(simulcastDynamicSyncState);
+  simulcastLatestVideoClock = null;
   updateSimulcastControls();
   if (options.clearVideoSync) {
     void sendVideoSync(false, 0); // 还原视频延迟 / 清除等待遮罩
@@ -964,6 +1011,41 @@ async function handleSimulcastStopClick(): Promise<void> {
   } finally {
     resetSimulcastLocalState({ clearVideoSync: true, saveRecord: true });
   }
+}
+
+async function updateSimulcastPlaybackSettings(): Promise<void> {
+  const activeTab = await getActiveTab();
+  if (typeof activeTab?.id !== 'number') {
+    return;
+  }
+
+  const response = await safeSendRuntimeMessage({
+    type: 'simulcast:updatePlayback',
+    tabId: activeTab.id,
+    originalVolume: getNumberControlValue('simulcast-original-volume', 0.25),
+    translatedVolume: getNumberControlValue('simulcast-translated-volume', 1),
+    translatedAudioDelayMs: getDelayControlValue('simulcast-translated-delay-ms'),
+  });
+
+  if (response.status === 'error') {
+    throw new Error(response.error || '更新同传音量失败');
+  }
+}
+
+function bindSimulcastPlaybackControl(id: string): void {
+  const input = document.getElementById(id) as HTMLInputElement | null;
+  if (!input) {
+    return;
+  }
+
+  const handleChange = (): void => {
+    void updateSimulcastPlaybackSettings().catch((error) => {
+      setTranslationStatus('simulcast-status', getErrorMessage(error), 'error');
+    });
+  };
+
+  input.addEventListener('input', handleChange);
+  input.addEventListener('change', handleChange);
 }
 
 /** 同传停止时，把累计的原文/译文存为「记录」页的翻译记录。 */
@@ -1014,6 +1096,8 @@ let simulcastSyncMeasured = false;
 type SimulcastSyncMeasurementSource = 'none' | 'subtitle' | 'audio';
 let simulcastSyncMeasuredFrom: SimulcastSyncMeasurementSource = 'none';
 let simulcastVideoHoldPending = false;
+const simulcastDynamicSyncState = createSimulcastDynamicSyncState();
+let simulcastLatestVideoClock: NonNullable<SimulcastUpdateMessage['videoClock']> | null = null;
 const SIMULCAST_TRANSLATED_AUDIO_PLAYING_STATUS = '同声传译运行中：正在播放译音。';
 
 // 视频上字幕叠加：当前句的原文/译文
@@ -1140,13 +1224,87 @@ async function sendVideoSync(
   }
 }
 
+function describeDynamicSyncAction(action: unknown): string {
+  switch (action) {
+    case 'rate':
+      return '微调播放速度';
+    case 'seek':
+      return '校正进度';
+    case 'live-buffer':
+      return '直播缓冲';
+    case 'enable':
+      return '启用同步';
+    case 'release':
+      return '释放画面';
+    case 'none':
+      return '偏差很小';
+    default:
+      return '已更新';
+  }
+}
+
+async function sendDynamicVideoSync(sample: SimulcastDynamicSyncSample): Promise<void> {
+  try {
+    const resp = await sendMessageToActiveTab<{
+      videoFound?: boolean;
+      mode?: string;
+      action?: string;
+    }>({
+      type: 'simulcast:dynamicVideoSync',
+      targetDelaySec: sample.targetDelaySec,
+      releaseHold: simulcastVideoHoldPending,
+    });
+    const videoFound = resp?.videoFound ?? resp?.data?.videoFound;
+    const action = resp?.action ?? resp?.data?.action;
+    if (videoFound === false) {
+      setSimulcastSyncStatus('未找到主视频（无法动态对齐）');
+      return;
+    }
+    const videoClockText =
+      simulcastLatestVideoClock && typeof simulcastLatestVideoClock.currentTime === 'number'
+        ? `，视频 ${simulcastLatestVideoClock.currentTime.toFixed(1)}s`
+        : '';
+    setSimulcastSyncStatus(
+      `自动动态对齐 ${sample.targetDelaySec.toFixed(1)}s，实测 ${sample.rawDelaySec.toFixed(1)}s（${describeDynamicSyncAction(
+        action
+      )}，样本 ${sample.sampleCount}${videoClockText}）`
+    );
+  } catch (error) {
+    setSimulcastSyncStatus('动态同步失败：' + getErrorMessage(error));
+  } finally {
+    if (simulcastVideoHoldPending) {
+      simulcastVideoHoldPending = false;
+    }
+  }
+}
+
+function handleTranslatedAudioPlaybackStarted(
+  translatedAudio: NonNullable<SimulcastUpdateMessage['translatedAudio']>
+): void {
+  if (!simulcastRunning) return;
+  const wallTimeMs =
+    typeof translatedAudio.wallTimeMs === 'number' && Number.isFinite(translatedAudio.wallTimeMs)
+      ? translatedAudio.wallTimeMs
+      : Date.now();
+  const sample = observeTranslatedAudioPlayback(simulcastDynamicSyncState, wallTimeMs);
+  if (!sample) {
+    maybeAutoMeasureSyncDelay('audio', wallTimeMs);
+    return;
+  }
+
+  simulcastSyncMeasured = true;
+  simulcastSyncMeasuredFrom = 'audio';
+  void sendDynamicVideoSync(sample);
+}
+
 /**
- * 自动对齐：用「首条源字幕 → 首条译文」先预估，再用「首条源字幕 → 首段译音播放」
- * 做一次重校准。译音播放时刻比译文字幕更接近用户实际听到的延迟。
+ * 自动对齐 fallback：首译文到达时先预估；译音真正开始播放后走动态样本闭环。
  * 不用 subtitle.startTime（火山实时常返回 0/会话相对值，会让延迟无限增大→疯狂 seek/循环）。
- * 只允许从字幕预估升级到译音实测，避免反复 seek 触发缓冲循环。
  */
-function maybeAutoMeasureSyncDelay(source: Exclude<SimulcastSyncMeasurementSource, 'none'>): void {
+function maybeAutoMeasureSyncDelay(
+  source: Exclude<SimulcastSyncMeasurementSource, 'none'>,
+  observedWallMs = Date.now()
+): void {
   if (!simulcastRunning) return;
   if (source === 'subtitle' && simulcastSyncMeasured) return;
   if (source === 'audio' && simulcastSyncMeasuredFrom === 'audio') return;
@@ -1155,13 +1313,13 @@ function maybeAutoMeasureSyncDelay(source: Exclude<SimulcastSyncMeasurementSourc
     setSimulcastSyncStatus('等待首段译音播放后释放画面');
     return;
   }
-  const lagSec = (Date.now() - simulcastFirstSourceWall) / 1000;
+  const lagSec = (observedWallMs - simulcastFirstSourceWall) / 1000;
   const delaySec = Math.min(8, Math.max(1, Math.round(lagSec * 2) / 2));
   simulcastSyncMeasured = true;
   simulcastSyncMeasuredFrom = source;
   void sendVideoSync(true, delaySec, {
     silent: true,
-    releaseHold: source === 'audio' && simulcastVideoHoldPending,
+    releaseHold: simulcastVideoHoldPending,
   });
   if (source === 'audio') {
     simulcastVideoHoldPending = false;
@@ -1590,6 +1748,9 @@ function initializeTranslationActions(): void {
   document.getElementById('simulcast-stop-btn')?.addEventListener('click', () => {
     void handleSimulcastStopClick();
   });
+  bindSimulcastPlaybackControl('simulcast-original-volume');
+  bindSimulcastPlaybackControl('simulcast-translated-volume');
+  bindSimulcastPlaybackControl('simulcast-translated-delay-ms');
   updateSimulcastControls();
 
   document.getElementById('transcribe-start-btn')?.addEventListener('click', () => {
@@ -2333,6 +2494,7 @@ function setupMessageListeners() {
       'simulcast:update': handleSimulcastUpdate,
       'simulcast:popupUpdate': handleSimulcastUpdate,
       'simulcast:videoPlaying': handleSimulcastVideoPlaying,
+      'simulcast:videoClock': handleSimulcastUpdate,
     };
 
     const handler = typeof messageType === 'string' ? asyncHandlers[messageType] : undefined;

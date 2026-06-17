@@ -35,6 +35,13 @@ export interface StartSimulcastRequest {
   credentials: SimultaneousInterpretationConfig['credentials'];
 }
 
+export interface UpdateSimulcastPlaybackRequest {
+  tabId: number;
+  originalVolume: number;
+  translatedVolume: number;
+  translatedAudioDelayMs: number;
+}
+
 export interface SimulcastRuntimeStatus {
   state: 'stopped' | 'capturing';
   tabId?: number;
@@ -133,6 +140,27 @@ export class SimulcastRuntime {
 
     await this.dependencies.removeAstAuthRule();
     this.status = { state: 'stopped' };
+    return this.getStatus();
+  }
+
+  async updatePlaybackSettings(
+    request: UpdateSimulcastPlaybackRequest
+  ): Promise<SimulcastRuntimeStatus> {
+    if (
+      this.status.state !== 'capturing' ||
+      typeof this.status.tabId !== 'number' ||
+      this.status.tabId !== request.tabId
+    ) {
+      return this.getStatus();
+    }
+
+    await this.dependencies.sendRuntimeMessage({
+      type: 'simulcast:offscreenUpdatePlayback',
+      tabId: request.tabId,
+      originalVolume: request.originalVolume,
+      translatedVolume: request.translatedVolume,
+      translatedAudioDelayMs: request.translatedAudioDelayMs,
+    });
     return this.getStatus();
   }
 

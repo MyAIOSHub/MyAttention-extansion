@@ -4,8 +4,12 @@ import {
   computeSeekTarget,
   findMainVideo,
   enableVideoSync,
+  holdVideoUntilTranslatedAudio,
+  initSimulcastVideoSyncListener,
   disableVideoSync,
+  releaseVideoHold,
   reapplyVideoSync,
+  applyDynamicVideoSyncControl,
   isVideoSyncActive,
   countVideos,
 } from '../../src/content/simulcast-video-sync';
@@ -40,6 +44,7 @@ function makeVideo(opts: FakeOpts): HTMLVideoElement {
 
 describe('simulcast-video-sync helpers', () => {
   beforeEach(() => {
+    vi.useRealTimers();
     disableVideoSync();
     document.body.innerHTML = '';
   });
@@ -107,6 +112,144 @@ describe('simulcast-video-sync helpers', () => {
       enableVideoSync(3); // → 97
       reapplyVideoSync(5); // diff 2 → 95
       expect(v.currentTime).toBe(95);
+    });
+
+    it('dynamic sync nudges moderate drift with temporary playbackRate instead of seeking', () => {
+      vi.useFakeTimers();
+      const v = makeVideo({ w: 640, h: 360, duration: 600, currentTime: 100 });
+      enableVideoSync(3);
+      v.currentTime = 120;
+
+      const result = applyDynamicVideoSyncControl(3.4);
+
+      expect(result).toMatchObject({
+        videoFound: true,
+        mode: 'vod',
+        action: 'rate',
+        targetDelaySec: 3.4,
+      });
+      expect(v.currentTime).toBe(120);
+      expect(v.playbackRate).toBeLessThan(1);
+
+      vi.advanceTimersByTime(result.durationMs ?? 0);
+
+      expect(v.playbackRate).toBe(1);
+    });
+
+    it('dynamic sync seeks when drift is too large for a gentle rate nudge', () => {
+      const v = makeVideo({ w: 640, h: 360, duration: 600, currentTime: 100 });
+      enableVideoSync(3);
+      v.currentTime = 120;
+
+      const result = applyDynamicVideoSyncControl(4.2);
+
+      expect(result).toMatchObject({
+        videoFound: true,
+        mode: 'vod',
+        action: 'seek',
+        targetDelaySec: 4.2,
+      });
+      expect(v.currentTime).toBeCloseTo(118.8);
+    });
+
+    it('dynamic sync ignores tiny delay drift', () => {
+      const v = makeVideo({ w: 640, h: 360, duration: 600, currentTime: 100 });
+      enableVideoSync(3);
+      v.currentTime = 120;
+
+      const result = applyDynamicVideoSyncControl(3.05);
+
+      expect(result).toMatchObject({
+        videoFound: true,
+        mode: 'vod',
+        action: 'none',
+        targetDelaySec: 3.05,
+      });
+      expect(v.currentTime).toBe(120);
+      expect(v.playbackRate).toBe(1);
+    });
+
+    it('freezes the visible frame while capture continues, then releases at the delayed time', () => {
+      const v = makeVideo({ w: 640, h: 360, duration: 600, currentTime: 100 });
+
+      expect(holdVideoUntilTranslatedAudio()).toEqual({ videoFound: true, mode: 'vod' });
+      expect(v.pause).not.toHaveBeenCalled();
+      expect(v.style.opacity).toBe('0');
+      expect(document.querySelector('[data-sayso-simulcast-hold="true"]')).not.toBeNull();
+
+      v.currentTime = 102;
+      expect(releaseVideoHold(2)).toEqual({ videoFound: true, mode: 'vod' });
+
+      expect(v.currentTime).toBe(100);
+      expect(v.style.opacity).toBe('');
+      expect(document.querySelector('[data-sayso-simulcast-hold="true"]')).toBeNull();
+      expect(isVideoSyncActive()).toBe(true);
+    });
+
+    it('notifies the runtime when the main video pauses', () => {
+      const sendMessage = vi.fn();
+      vi.stubGlobal('chrome', {
+        runtime: {
+          sendMessage,
+          onMessage: { addListener: vi.fn() },
+        },
+      });
+      const v = makeVideo({ w: 640, h: 360, duration: 600, currentTime: 100 });
+
+      initSimulcastVideoSyncListener();
+      v.dispatchEvent(new Event('pause', { bubbles: true }));
+
+      expect(sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'simulcast:videoStopped',
+          reason: 'pause',
+        })
+      );
+      vi.unstubAllGlobals();
+    });
+
+    it('releases the visual hold from a dynamic sync message with releaseHold', () => {
+      let listener:
+        | ((message: any, sender: unknown, sendResponse: (response: any) => void) => boolean | undefined)
+        | undefined;
+      vi.stubGlobal('chrome', {
+        runtime: {
+          sendMessage: vi.fn(),
+          onMessage: {
+            addListener: vi.fn((fn) => {
+              listener = fn;
+            }),
+          },
+        },
+      });
+      const v = makeVideo({ w: 640, h: 360, duration: 600, currentTime: 100 });
+
+      initSimulcastVideoSyncListener();
+      expect(holdVideoUntilTranslatedAudio()).toEqual({ videoFound: true, mode: 'vod' });
+      v.currentTime = 103;
+
+      const sendResponse = vi.fn();
+      expect(
+        listener?.(
+          { type: 'simulcast:dynamicVideoSync', targetDelaySec: 2, releaseHold: true },
+          {},
+          sendResponse
+        )
+      ).toBe(true);
+
+      expect(sendResponse).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: 'ok',
+          videoFound: true,
+          mode: 'vod',
+          action: 'release',
+          targetDelaySec: 2,
+        })
+      );
+      expect(v.currentTime).toBe(101);
+      expect(v.style.opacity).toBe('');
+      expect(document.querySelector('[data-sayso-simulcast-hold="true"]')).toBeNull();
+      vi.unstubAllGlobals();
     });
   });
 });

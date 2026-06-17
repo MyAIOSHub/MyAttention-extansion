@@ -39,9 +39,18 @@ const AST_EVENTS = {
   FinishSession: 102,
   SessionStarted: 150,
   TaskRequest: 200,
+  TTSSentenceStart: 350,
+  TTSSentenceEnd: 351,
+  TTSResponse: 352,
+  SourceSubtitleStart: 650,
   SourceSubtitleResponse: 651,
   TranslationSubtitleResponse: 654,
 };
+
+const MOCK_TTS_OGG_OPUS = new Uint8Array(Buffer.from(
+  'T2dnUwACAAAAAAAAAADW/8LSAAAAAKq00FgBE09wdXNIZWFkAQE4AYC7AAAAAABPZ2dTAAAAAAAAAAAAANb/wtIBAAAAWP7qRAE9T3B1c1RhZ3MMAAAATGF2ZjYyLjMuMTAwAQAAAB0AAABlbmNvZGVyPUxhdmM2Mi4xMS4xMDAgbGlib3B1c09nZ1MABLgXAAAAAAAA1v/C0gIAAADWkswRBzwxMDQxMCF4grRSgYvPU7sqLpGpjF1SDDc8f0jg3vcx3odJZ6o43/KI2HAqfayYvCRRNjYSn9XLtnDaIFKtiycJXQF4niIAjyQ9Vc6wuNvyoUNNhsFtqBNS5Gbn2UyuxWN+DiT0CR/UfOIxZ0aapvLaQMt1eJujXgASIR1SqXab3bSIUvDLoz7Bf5igtUL/1bpMemcg6rWUDNqL30aUX7vzWbAneJujXgASIR1Sqy6zU2/T//oHfGpQ0/ln9dmXgks/Vx6t0Z6H3AliCPFzFyp2IlO3XV80FHibo14AEiEdUqpEG6ON+0yxHOpfO7JEeiV25T+BQShQdAANcHnG56sZZ3SsTWw6VZp4m6NeABIhHVKqWMXGho9WzsmD6HbCQj9CDwrIAhVhbsmSUbzSuS4ekZxxRUIROOt4Bk2mgS66WhM0PzcRSmZkI/oftlh20I3nBt+nQxHCf/4=',
+  'base64'
+));
 
 function assert(condition, message) {
   if (!condition) {
@@ -49,17 +58,56 @@ function assert(condition, message) {
   }
 }
 
-function findChromeExecutable() {
-  const candidate = DEFAULT_CHROME_PATHS.find((path) => path && existsSync(path));
-  if (!candidate) {
+function findChromeExecutables() {
+  const candidates = Array.from(new Set(DEFAULT_CHROME_PATHS.filter((path) => path && existsSync(path))));
+  if (candidates.length === 0) {
     throw new Error('Chrome executable not found. Set CHROME_BIN to a Chrome/Chromium binary.');
   }
-  return candidate;
+
+  if (process.env.CHROME_BIN && isOfficialGoogleChrome(process.env.CHROME_BIN)) {
+    throw new Error(
+      'Google Chrome branded builds do not allow --load-extension / --disable-extensions-except. Set CHROME_BIN to Chromium or Chrome for Testing.'
+    );
+  }
+
+  const supportedCandidates = candidates.filter((path) => !isOfficialGoogleChrome(path));
+  if (supportedCandidates.length === 0) {
+    throw new Error(
+      'Google Chrome branded builds do not allow --load-extension / --disable-extensions-except. Set CHROME_BIN to Chromium or Chrome for Testing.'
+    );
+  }
+  return supportedCandidates;
+}
+
+function isOfficialGoogleChrome(path) {
+  return path.includes('/Google Chrome.app/') && !path.includes('/Google Chrome for Testing.app/');
 }
 
 function findCachedChromiumExecutables() {
   const candidates = [];
+  const playwrightBrowserRoot = resolve(homedir(), 'Library/Caches/ms-playwright');
   const codexBrowserRoot = resolve(homedir(), 'Library/Caches/codex-browsers/chromium');
+
+  // Prefer Chrome for Testing: it preserves extension loading flags and reliably writes
+  // DevToolsActivePort in current Chrome builds.
+  if (existsSync(playwrightBrowserRoot)) {
+    for (const buildDir of safeReadDir(playwrightBrowserRoot)) {
+      candidates.push(
+        resolve(
+          playwrightBrowserRoot,
+          buildDir,
+          'chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing'
+        )
+      );
+      candidates.push(
+        resolve(
+          playwrightBrowserRoot,
+          buildDir,
+          'chrome-mac/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing'
+        )
+      );
+    }
+  }
 
   if (existsSync(codexBrowserRoot)) {
     for (const buildDir of safeReadDir(codexBrowserRoot)) {
@@ -228,7 +276,10 @@ function readRequestBody(request) {
 }
 
 function pickDebuggingPort() {
-  return 9300 + Math.floor(Math.random() * 500);
+  if (process.env.EXT_VERIFY_DEBUGGING_PORT) {
+    return Number(process.env.EXT_VERIFY_DEBUGGING_PORT);
+  }
+  return 0;
 }
 
 async function launchChrome({ chromePath, userDataDir, debuggingPort, astProxyPort }) {
@@ -259,13 +310,29 @@ async function launchChrome({ chromePath, userDataDir, debuggingPort, astProxyPo
   const child = spawn(chromePath, args, {
     stdio: ['ignore', 'pipe', 'pipe'],
   });
+  const stdoutChunks = [];
+  const stderrChunks = [];
+  const rememberChunk = (chunks, chunk) => {
+    chunks.push(String(chunk));
+    while (chunks.join('').length > 4000) {
+      chunks.shift();
+    }
+  };
+  child.verifyRuntime = {
+    chromePath,
+    args,
+    stdout: () => stdoutChunks.join(''),
+    stderr: () => stderrChunks.join(''),
+  };
 
   child.stdout.on('data', (chunk) => {
+    rememberChunk(stdoutChunks, chunk);
     if (process.env.EXT_VERIFY_DEBUG) {
       process.stdout.write(`[chrome] ${chunk}`);
     }
   });
   child.stderr.on('data', (chunk) => {
+    rememberChunk(stderrChunks, chunk);
     if (process.env.EXT_VERIFY_DEBUG) {
       process.stderr.write(`[chrome] ${chunk}`);
     }
@@ -293,6 +360,7 @@ async function startMockAstProxy(workDir) {
     authHeaderOk: false,
     sessionId: '',
     subtitleSent: false,
+    ttsSent: false,
   };
 
   const server = createNetServer((socket) => {
@@ -512,6 +580,14 @@ function handleAstFrame(socket, state, frame) {
     setTimeout(() => {
       state.subtitleSent = true;
       socket.write(buildServerWebSocketFrame(encodeAstResponseFrame({
+        event: AST_EVENTS.SourceSubtitleStart,
+        sessionId: request.sessionId,
+        text: 'runtime source start',
+        startTime: 1000,
+        endTime: 1000,
+        speakerId: 'speaker-a',
+      })));
+      socket.write(buildServerWebSocketFrame(encodeAstResponseFrame({
         event: AST_EVENTS.SourceSubtitleResponse,
         sessionId: request.sessionId,
         text: 'runtime source subtitle',
@@ -528,6 +604,22 @@ function handleAstFrame(socket, state, frame) {
         speakerId: 'speaker-a',
       })));
     }, 300);
+    setTimeout(() => {
+      state.ttsSent = true;
+      socket.write(buildServerWebSocketFrame(encodeAstResponseFrame({
+        event: AST_EVENTS.TTSSentenceStart,
+        sessionId: request.sessionId,
+      })));
+      socket.write(buildServerWebSocketFrame(encodeAstResponseFrame({
+        event: AST_EVENTS.TTSResponse,
+        sessionId: request.sessionId,
+        data: MOCK_TTS_OGG_OPUS,
+      })));
+      socket.write(buildServerWebSocketFrame(encodeAstResponseFrame({
+        event: AST_EVENTS.TTSSentenceEnd,
+        sessionId: request.sessionId,
+      })));
+    }, 1200);
   } else if (request.event === AST_EVENTS.TaskRequest) {
     state.taskRequests += 1;
   } else if (request.event === AST_EVENTS.FinishSession) {
@@ -588,7 +680,8 @@ function decodeRequestMeta(bytes) {
 function encodeAstResponseFrame({
   event,
   sessionId,
-  text,
+  data = new Uint8Array(),
+  text = '',
   startTime = 0,
   endTime = 320,
   speakerId = '',
@@ -601,6 +694,7 @@ function encodeAstResponseFrame({
   return new Uint8Array([
     ...fieldBytes(1, meta),
     ...fieldVarint(2, event),
+    ...(data.length ? fieldBytes(3, data) : []),
     ...fieldString(4, text),
     ...fieldVarint(5, startTime),
     ...fieldVarint(6, endTime),
@@ -708,13 +802,58 @@ async function fetchJson(url, options) {
   return response.json();
 }
 
-async function waitForDevTools(port) {
-  const url = `http://127.0.0.1:${port}/json/version`;
-  return retry(async () => fetchJson(url), {
+async function waitForDevTools(port, userDataDir, chrome) {
+  const actualPort =
+    port === 0
+      ? await waitForDevToolsActivePort(userDataDir, chrome)
+      : port;
+  const version = await retry(async () => fetchJson(`http://127.0.0.1:${actualPort}/json/version`), {
     timeoutMs: 15000,
     intervalMs: 200,
     label: 'Chrome DevTools endpoint',
   });
+  return { port: actualPort, version };
+}
+
+async function waitForDevToolsActivePort(userDataDir, chrome) {
+  try {
+    return await retry(
+      async () => {
+        if (chrome.exitCode !== null || chrome.signalCode !== null) {
+          throw new Error(
+            `Chrome exited before DevTools started (code=${chrome.exitCode ?? 'null'}, signal=${chrome.signalCode ?? 'null'})`
+          );
+        }
+        const activePortPath = resolve(userDataDir, 'DevToolsActivePort');
+        if (!existsSync(activePortPath)) {
+          throw new Error('DevToolsActivePort not written yet');
+        }
+        const [portLine] = readFileSync(activePortPath, 'utf8').trim().split('\n');
+        const port = Number(portLine);
+        if (!Number.isInteger(port) || port <= 0) {
+          throw new Error(`Invalid DevToolsActivePort: ${portLine}`);
+        }
+        return port;
+      },
+      {
+        timeoutMs: 15000,
+        intervalMs: 200,
+        label: 'Chrome DevTools active port file',
+      }
+    );
+  } catch (error) {
+    const stderr = chrome.verifyRuntime?.stderr?.() ?? '';
+    throw new Error(
+      [
+        error instanceof Error ? error.message : String(error),
+        `binary=${chrome.verifyRuntime?.chromePath ?? 'unknown'}`,
+        `pid=${chrome.pid ?? 'unknown'}`,
+        `exitCode=${chrome.exitCode ?? 'null'}`,
+        `signal=${chrome.signalCode ?? 'null'}`,
+        stderr ? `stderr=${JSON.stringify(stderr)}` : 'stderr=""',
+      ].join('; ')
+    );
+  }
 }
 
 async function discoverExtensionId({ port, userDataDir }) {
@@ -909,8 +1048,8 @@ async function verifyPopup(cdp, sessionId) {
         sessionId,
         `new Promise((resolve) => {
           const done = () => {
-            const immersiveTab = document.getElementById('tab-immersive-translation');
-            const simulcastTab = document.getElementById('tab-simultaneous-interpretation');
+            const immersiveTab = document.querySelector('[data-translate-sub="immersive"]');
+            const simulcastTab = document.querySelector('[data-translate-sub="simultaneous"]');
             if (!immersiveTab || !simulcastTab) {
               resolve({
                 url: location.href,
@@ -1061,16 +1200,16 @@ async function verifySimulcastStart(
     cdp,
     popupSessionId,
     `(() => {
-      document.getElementById('tab-simultaneous-interpretation')?.click();
+      document.querySelector('[data-translate-sub="simultaneous"]')?.click();
       const values = {
         'simulcast-api-key': 'runtime-ast-key',
         'simulcast-source-language': 'en',
         'simulcast-target-language': 'zh-CN',
         'simulcast-model': 'Doubao_scene_SLM_Doubao_SI_model2000000748711437826',
-        'simulcast-output-mode': 'subtitlesOnly',
+        'simulcast-output-mode': 'mixed',
         'simulcast-subtitle-mode': 'bilingual',
         'simulcast-original-volume': '0',
-        'simulcast-translated-volume': '0',
+        'simulcast-translated-volume': '1',
         'simulcast-translated-delay-ms': '300'
       };
       Object.entries(values).forEach(([id, value]) => {
@@ -1091,6 +1230,33 @@ async function verifySimulcastStart(
     })()`
   );
 
+  const holdStarted = await retry(
+    async () => {
+      const result = await evaluate(
+        cdp,
+        pageSessionId,
+        `(() => {
+          const video = document.getElementById('runtime-video');
+          return {
+            hasHoldOverlay: Boolean(document.querySelector('[data-sayso-simulcast-hold="true"]')),
+            videoOpacity: video?.style?.opacity ?? '',
+            paused: video?.paused ?? null,
+            currentTime: video?.currentTime ?? null
+          };
+        })()`
+      );
+      if (!result.hasHoldOverlay || result.videoOpacity !== '0' || result.paused !== false) {
+        throw new Error(`video hold not active yet: ${JSON.stringify(result)}`);
+      }
+      return result;
+    },
+    {
+      timeoutMs: 5000,
+      intervalMs: 100,
+      label: 'video visual hold',
+    }
+  );
+
   const startResult = await retry(
     async () => {
       const result = await evaluate(
@@ -1098,10 +1264,10 @@ async function verifySimulcastStart(
         popupSessionId,
         `(() => {
           const status = document.getElementById('simulcast-status')?.textContent?.trim() ?? '';
+          const paired = document.getElementById('simulcast-paired')?.textContent?.trim() ?? '';
           return {
             status,
-            original: document.getElementById('simulcast-original-text')?.textContent?.trim() ?? '',
-            translated: document.getElementById('simulcast-translated-text')?.textContent?.trim() ?? ''
+            paired
           };
         })()`
       );
@@ -1144,6 +1310,7 @@ async function verifySimulcastStart(
         finishSessions: astState.finishSessions,
         binaryFrames: astState.binaryFrames,
         subtitleSent: astState.subtitleSent,
+        ttsSent: astState.ttsSent,
       };
     },
     {
@@ -1159,21 +1326,19 @@ async function verifySimulcastStart(
         cdp,
         popupSessionId,
         `(() => ({
-          original: document.getElementById('simulcast-original-text')?.textContent?.trim() ?? '',
-          translated: document.getElementById('simulcast-translated-text')?.textContent?.trim() ?? '',
           status: document.getElementById('simulcast-status')?.textContent?.trim() ?? '',
-          speakerLog: document.getElementById('simulcast-speaker-log')?.textContent?.trim() ?? '',
+          paired: document.getElementById('simulcast-paired')?.textContent?.trim() ?? '',
           delayValue: document.getElementById('simulcast-translated-delay-ms')?.value ?? ''
         }))()`
       );
-      if (!result.original.includes('runtime source subtitle')) {
+      if (!result.paired.includes('runtime source subtitle')) {
         throw new Error(`source subtitle not rendered yet: ${JSON.stringify(result)}`);
       }
-      if (!result.translated.includes('运行时同传字幕')) {
+      if (!result.paired.includes('运行时同传字幕')) {
         throw new Error(`translation subtitle not rendered yet: ${JSON.stringify(result)}`);
       }
-      if (!result.speakerLog.includes('说话人 1') || !result.speakerLog.includes('原文') || !result.speakerLog.includes('译文')) {
-        throw new Error(`speaker log not rendered yet: ${JSON.stringify(result)}`);
+      if (!result.paired.includes('runtime source subtitle') || !result.paired.includes('运行时同传字幕')) {
+        throw new Error(`paired transcript not rendered yet: ${JSON.stringify(result)}`);
       }
       if (result.delayValue !== '300') {
         throw new Error(`simulcast delay control was not retained: ${JSON.stringify(result)}`);
@@ -1187,29 +1352,110 @@ async function verifySimulcastStart(
     }
   );
 
-  const stopResult = await evaluate(
-    cdp,
-    popupSessionId,
-    `new Promise((resolve) => {
-      chrome.runtime.sendMessage({ type: 'simulcast:stop' }, (response) => {
-        resolve({
-          error: chrome.runtime.lastError?.message ?? null,
-          response
-        });
-      });
-    })`
+  const translatedAudioPlayback = await retry(
+    async () => {
+      const result = await evaluate(
+        cdp,
+        popupSessionId,
+        `(() => ({
+          status: document.getElementById('simulcast-status')?.textContent?.trim() ?? '',
+          syncStatus: document.getElementById('simulcast-sync-status')?.textContent?.trim() ?? ''
+        }))()`
+      );
+      if (!result.status.includes('正在播放译音')) {
+        throw new Error(`translated audio not playing yet: ${JSON.stringify(result)}`);
+      }
+      if (!result.syncStatus.includes('自动动态对齐')) {
+        throw new Error(`dynamic sync status not updated yet: ${JSON.stringify(result)}`);
+      }
+      return result;
+    },
+    {
+      timeoutMs: 8000,
+      intervalMs: 200,
+      label: 'translated audio playback and dynamic sync',
+    }
   );
 
-  assert(!stopResult?.error, `Unable to stop simulcast runtime: ${stopResult?.error}`);
-  const stopped = stopResult?.response?.simulcast ?? stopResult?.response?.data?.simulcast;
-  assert(stopped?.state === 'stopped', `Unexpected simulcast stop response: ${JSON.stringify(stopResult?.response)}`);
+  const holdReleased = await retry(
+    async () => {
+      const result = await evaluate(
+        cdp,
+        pageSessionId,
+        `(() => {
+          const video = document.getElementById('runtime-video');
+          return {
+            hasHoldOverlay: Boolean(document.querySelector('[data-sayso-simulcast-hold="true"]')),
+            videoOpacity: video?.style?.opacity ?? '',
+            paused: video?.paused ?? null,
+            currentTime: video?.currentTime ?? null,
+            playbackRate: video?.playbackRate ?? null
+          };
+        })()`
+      );
+      if (result.hasHoldOverlay || result.videoOpacity === '0' || result.paused !== false) {
+        throw new Error(`video hold not released yet: ${JSON.stringify(result)}`);
+      }
+      return result;
+    },
+    {
+      timeoutMs: 5000,
+      intervalMs: 100,
+      label: 'video hold release',
+    }
+  );
+
+  await evaluate(
+    cdp,
+    pageSessionId,
+    `(() => {
+      document.getElementById('runtime-video')?.pause();
+      return { paused: document.getElementById('runtime-video')?.paused ?? null };
+    })()`
+  );
+
+  const videoPauseStopped = await retry(
+    async () => {
+      const result = await evaluate(
+        cdp,
+        popupSessionId,
+        `new Promise((resolve) => {
+          chrome.runtime.sendMessage({ type: 'simulcast:getStatus' }, (response) => {
+            resolve({
+              error: chrome.runtime.lastError?.message ?? null,
+              response
+            });
+          });
+        })`
+      );
+      if (result?.error) {
+        throw new Error(result.error);
+      }
+      const status = result?.response?.simulcast ?? result?.response?.data?.simulcast;
+      if (status?.state !== 'stopped') {
+        throw new Error(`simulcast not stopped after video pause: ${JSON.stringify(result?.response)}`);
+      }
+      return status;
+    },
+    {
+      timeoutMs: 5000,
+      intervalMs: 150,
+      label: 'video pause stops simulcast',
+    }
+  );
 
   return {
     media,
+    holdStarted,
     started: startResult,
-    ast,
+    ast: {
+      ...ast,
+      ttsSent: astState.ttsSent,
+    },
     popupSubtitles,
-    stopped,
+    translatedAudioPlayback,
+    holdReleased,
+    videoPauseStopped,
   };
 }
 
@@ -1332,11 +1578,54 @@ async function closeServer(server) {
   await new Promise((resolvePromise) => server.close(resolvePromise));
 }
 
+async function terminateChrome(chrome) {
+  if (!chrome || chrome.exitCode !== null || chrome.signalCode !== null) {
+    return;
+  }
+
+  chrome.kill('SIGTERM');
+  await Promise.race([
+    new Promise((resolvePromise) => chrome.once('exit', resolvePromise)),
+    new Promise((resolvePromise) => setTimeout(resolvePromise, 2000)),
+  ]);
+
+  if (chrome.exitCode === null && chrome.signalCode === null) {
+    chrome.kill('SIGKILL');
+    await Promise.race([
+      new Promise((resolvePromise) => chrome.once('exit', resolvePromise)),
+      new Promise((resolvePromise) => setTimeout(resolvePromise, 1000)),
+    ]);
+  }
+}
+
 async function main() {
   verifyDistArtifacts();
   assert(typeof WebSocket === 'function', 'Node.js WebSocket global is required for CDP.');
 
-  const chromePath = findChromeExecutable();
+  const chromePaths = findChromeExecutables();
+  const failures = [];
+
+  for (const chromePath of chromePaths) {
+    try {
+      const result = await runVerificationWithChrome(chromePath);
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    } catch (error) {
+      failures.push({
+        chrome: chromePath,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  throw new Error(
+    `All Chrome candidates failed:\n${failures
+      .map((failure) => `- ${failure.chrome}: ${failure.message}`)
+      .join('\n')}`
+  );
+}
+
+async function runVerificationWithChrome(chromePath) {
   const debuggingPort = pickDebuggingPort();
   const userDataDir = await mkdtemp(resolve(tmpdir(), 'sayso-extension-runtime-'));
   const fixture = await startFixtureServer();
@@ -1351,11 +1640,11 @@ async function main() {
   let cdp;
 
   try {
-    const version = await waitForDevTools(debuggingPort);
-    cdp = new CdpConnection(version.webSocketDebuggerUrl);
+    const devTools = await waitForDevTools(debuggingPort, userDataDir, chrome);
+    cdp = new CdpConnection(devTools.version.webSocketDebuggerUrl);
 
     const extensionId = await discoverExtensionId({
-      port: debuggingPort,
+      port: devTools.port,
       userDataDir,
     });
     const popupUrl = `chrome-extension://${extensionId}/html/popup.html`;
@@ -1381,28 +1670,22 @@ async function main() {
       mockAst.state
     );
 
-    console.log(
-      JSON.stringify(
-        {
-          status: 'ok',
-          chrome: basename(chromePath),
-          extensionId,
-          popup,
-          simulcast,
-          pageTranslation: {
-            translatedCount: pageTranslation.messageResult.response.translatedCount,
-            blockCount: pageTranslation.domResult.blockCount,
-            blocks: pageTranslation.domResult.blocks,
-          },
-          simulcastStart,
-        },
-        null,
-        2
-      )
-    );
+    return {
+      status: 'ok',
+      chrome: basename(chromePath),
+      extensionId,
+      popup,
+      simulcast,
+      pageTranslation: {
+        translatedCount: pageTranslation.messageResult.response.translatedCount,
+        blockCount: pageTranslation.domResult.blockCount,
+        blocks: pageTranslation.domResult.blocks,
+      },
+      simulcastStart,
+    };
   } finally {
     cdp?.close();
-    chrome.kill('SIGTERM');
+    await terminateChrome(chrome);
     await closeServer(fixture.server).catch(() => undefined);
     await closeServer(mockAst.server).catch(() => undefined);
     await rm(userDataDir, { recursive: true, force: true }).catch(() => undefined);

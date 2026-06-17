@@ -719,8 +719,63 @@ const messageHandlersMap: Record<
     return { simulcast };
   },
 
+  'simulcast:videoStopped': async (params, sender) => {
+    const tabId =
+      typeof params.tabId === 'number'
+        ? params.tabId
+        : typeof sender.tab?.id === 'number'
+          ? sender.tab.id
+          : undefined;
+    const current = simulcastRuntime.getStatus();
+    if (
+      current.state !== 'capturing' ||
+      typeof tabId !== 'number' ||
+      current.tabId !== tabId
+    ) {
+      return { status: 'ok', stopped: false };
+    }
+
+    const simulcast = await simulcastRuntime.stop();
+    await broadcastRuntimeNotification({
+      type: 'simulcast:popupUpdate',
+      tabId,
+      videoStopped: true,
+      status: {
+        kind: 'success',
+        message: '视频已停止，同声传译已停止。',
+      },
+    });
+    return { status: 'ok', stopped: true, simulcast };
+  },
+
   'simulcast:getStatus': async () => {
     return { simulcast: simulcastRuntime.getStatus() };
+  },
+
+  'simulcast:updatePlayback': async (params) => {
+    const current = simulcastRuntime.getStatus();
+    const tabId =
+      typeof params.tabId === 'number'
+        ? params.tabId
+        : typeof current.tabId === 'number'
+          ? current.tabId
+          : undefined;
+
+    if (
+      current.state !== 'capturing' ||
+      typeof tabId !== 'number' ||
+      current.tabId !== tabId
+    ) {
+      return { status: 'ok', updated: false, simulcast: current };
+    }
+
+    const simulcast = await simulcastRuntime.updatePlaybackSettings({
+      tabId,
+      originalVolume: normalizeVolume(params.originalVolume, 0.25),
+      translatedVolume: normalizeVolume(params.translatedVolume, 1),
+      translatedAudioDelayMs: normalizeSimulcastPlaybackDelayMs(params.translatedAudioDelayMs),
+    });
+    return { status: 'ok', updated: true, simulcast };
   },
 
   'simulcast:update': async (params) => {
@@ -728,13 +783,40 @@ const messageHandlersMap: Record<
       tabId: params.tabId,
       subtitle: params.subtitle,
       status: params.status,
+      translatedAudio: params.translatedAudio,
     });
     await broadcastRuntimeNotification({
       type: 'simulcast:popupUpdate',
       tabId: params.tabId,
       subtitle: params.subtitle,
       status: params.status,
+      translatedAudio: params.translatedAudio,
       audio: params.audio, // 转写录音回放（停止时一次性下发）
+    });
+    return { status: 'ok' };
+  },
+
+  'simulcast:videoClock': async (params, sender) => {
+    const tabId =
+      typeof params.tabId === 'number'
+        ? params.tabId
+        : typeof sender.tab?.id === 'number'
+          ? sender.tab.id
+          : undefined;
+    await broadcastRuntimeNotification({
+      type: 'simulcast:popupUpdate',
+      tabId,
+      videoClock: {
+        mode: params.mode,
+        mediaTime: params.mediaTime,
+        expectedDisplayTime: params.expectedDisplayTime,
+        performanceNow: params.performanceNow,
+        currentTime: params.currentTime,
+        playbackRate: params.playbackRate,
+        paused: params.paused,
+        ended: params.ended,
+        presentedFrames: params.presentedFrames,
+      },
     });
     return { status: 'ok' };
   },
@@ -1148,23 +1230,23 @@ async function refreshContextMenus(): Promise<void> {
 
     await createContextMenu({
       id: CONTEXT_MENU_IDS.SELECTION,
-      title: '保存选中文本到 SaySo Snip',
+      title: '保存选中文本到 SaySo Scribe',
       contexts: ['selection'],
     });
     await createContextMenu({
       id: CONTEXT_MENU_IDS.PAGE,
-      title: '保存当前页面片段到 SaySo Snip',
+      title: '保存当前页面片段到 SaySo Scribe',
       contexts: ['page'],
     });
     await createContextMenu({
       id: CONTEXT_MENU_IDS.LINK,
-      title: '保存链接文本到 SaySo Snip',
+      title: '保存链接文本到 SaySo Scribe',
       contexts: ['link'],
     });
     if (webCapture.mediaEnabled !== false) {
       await createContextMenu({
         id: CONTEXT_MENU_IDS.MEDIA,
-        title: '保存媒体到 SaySo Snip',
+        title: '保存媒体到 SaySo Scribe',
         contexts: ['image', 'video', 'audio'],
       });
     }

@@ -23,6 +23,7 @@ export const DEFAULT_NOTIFICATION_TYPES = new Set<string>([
   'simulcast:update',
   'simulcast:popupUpdate',
   'simulcast:videoPlaying',
+  'simulcast:videoClock',
 ]);
 
 export const DEFAULT_IGNORED_REQUEST_TYPES = new Set<string>([

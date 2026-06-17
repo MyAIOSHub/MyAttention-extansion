@@ -10,8 +10,17 @@ describe('simulcast message types', () => {
     expect(typesSource).toContain("'simulcast:stop'");
     expect(typesSource).toContain("'simulcast:getStatus'");
     expect(typesSource).toContain("'simulcast:update'");
+    expect(typesSource).toContain("'simulcast:updatePlayback'");
     expect(typesSource).toContain("'simulcast:popupUpdate'");
     expect(typesSource).toContain("'simulcast:offscreenStart'");
     expect(typesSource).toContain("'simulcast:offscreenStop'");
+    expect(typesSource).toContain("'simulcast:offscreenUpdatePlayback'");
+    expect(typesSource).toContain("'simulcast:syncVideo'");
+    expect(typesSource).toContain("'simulcast:videoPlaying'");
+    expect(typesSource).toContain("'simulcast:videoStopped'");
+    expect(typesSource).toContain("'simulcast:queryVideoPlaying'");
+    expect(typesSource).toContain("'simulcast:subtitle'");
+    expect(typesSource).toContain("'simulcast:videoClock'");
+    expect(typesSource).toContain("'simulcast:dynamicVideoSync'");
   });
 });

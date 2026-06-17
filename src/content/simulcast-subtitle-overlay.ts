@@ -30,11 +30,11 @@ function ensureOverlay(): HTMLDivElement {
   const src = document.createElement('div');
   src.style.cssText =
     'font-size:17px;line-height:1.3;color:#e5e7eb;text-shadow:0 2px 6px rgba(0,0,0,.9);' +
-    'background:rgba(0,0,0,.5);padding:1px 9px;border-radius:6px;width:fit-content;max-width:100%;margin:0 auto 4px;';
+    'background:transparent;padding:0;width:fit-content;max-width:100%;margin:0 auto 4px;';
   const tr = document.createElement('div');
   tr.style.cssText =
     'font-size:25px;line-height:1.35;color:#fff;font-weight:600;text-shadow:0 2px 6px rgba(0,0,0,.95);' +
-    'background:rgba(0,0,0,.58);padding:2px 11px;border-radius:7px;width:fit-content;max-width:100%;margin:0 auto;';
+    'background:transparent;padding:0;width:fit-content;max-width:100%;margin:0 auto;';
 
   box.appendChild(src);
   box.appendChild(tr);
