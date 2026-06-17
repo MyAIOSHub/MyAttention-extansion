@@ -1623,7 +1623,7 @@ function updateEmptyReasonHint(): void {
   }
 
   if (!runtimeDiagnostics) {
-    node.textContent = '访问支持的 AI 聊天页面开始记录对话';
+    node.textContent = '浏览网页、划词、翻译或转写，记录会自动归集到这里';
     return;
   }
 
