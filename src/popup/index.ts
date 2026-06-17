@@ -151,6 +151,7 @@ import {
 import { formatPageTranslationStatus } from './translation-status';
 import {
   formatSimulcastTimestamp,
+  pickActiveSegmentIndex,
   reduceSimulcastSpeakerSegments,
   type SimulcastSpeakerSegment,
   type SimulcastSubtitleChannel,
@@ -307,6 +308,7 @@ interface SimulcastUpdateMessage {
     segmentId?: number;
     wallTimeMs?: number;
     delayMs?: number;
+    playbackRate?: number;
   };
   videoClock?: {
     mode?: string;
@@ -616,34 +618,53 @@ function renderSimulcastPaired(): void {
     return;
   }
 
-  // 用墙钟时间做时间戳（火山实时 AST 的 startTime 常为 0）：相对会话最早一条计时
+  // 优先用主视频播放位置做时间戳（与画面对齐）；无视频时钟时回退墙钟相对会话起点。
   const base = simulcastSpeakerSegments.reduce(
     (min, s) => (s.clockWall > 0 && s.clockWall < min ? s.clockWall : min),
     Number.POSITIVE_INFINITY
   );
-  const relTime = (s: SimulcastSpeakerSegment): string =>
-    Number.isFinite(base) && s.clockWall > 0
+  const relTime = (s: SimulcastSpeakerSegment): string => {
+    if (typeof s.videoTime === 'number' && Number.isFinite(s.videoTime)) {
+      return formatSimulcastTimestamp(s.videoTime * 1000);
+    }
+    return Number.isFinite(base) && s.clockWall > 0
       ? formatSimulcastTimestamp(s.clockWall - base)
       : '--:--';
+  };
 
   const turns = sources.map((src, i) => ({
+    id: src.id,
     time: relTime(src),
     source: src.text,
     translation: translations[i]?.text ?? '',
   }));
 
-  el.innerHTML = turns
-    .slice(-40)
-    .map((t) => {
-      const head = `<div class="mb-0.5"><span class="text-[10px] text-gray-400">${t.time}</span></div>`;
+  const visible = turns.slice(-40);
+  const activeId = simulcastActiveSourceId;
+  const activeIndex = activeId ? visible.findIndex((t) => t.id === activeId) : -1;
+
+  el.innerHTML = visible
+    .map((t, i) => {
+      const isActive = i === activeIndex;
+      const wrapClass = isActive
+        ? 'border-b border-gray-50 pb-2 pl-2 -ml-2 border-l-2 border-l-indigo-400 bg-indigo-50/40 rounded-r'
+        : 'border-b border-gray-50 pb-2';
+      const timeClass = isActive ? 'text-indigo-500' : 'text-gray-400';
+      const head = `<div class="mb-0.5"><span class="text-[10px] ${timeClass}">${t.time}</span></div>`;
       const srcLine = `<div class="text-gray-800 text-sm leading-relaxed">${escapeHtml(t.source)}</div>`;
       const trLine = t.translation
         ? `<div class="text-gray-500 text-sm leading-relaxed">${escapeHtml(t.translation)}</div>`
         : '';
-      return `<div class="border-b border-gray-50 pb-2">${head}${srcLine}${trLine}</div>`;
+      return `<div class="${wrapClass}">${head}${srcLine}${trLine}</div>`;
     })
     .join('');
-  el.scrollTop = el.scrollHeight;
+
+  // 高亮行在末尾（直播）→ 跟随底部；用户回退/暂停看历史 → 滚到高亮处
+  if (activeIndex < 0 || activeIndex === visible.length - 1) {
+    el.scrollTop = el.scrollHeight;
+  } else {
+    (el.children[activeIndex] as HTMLElement | undefined)?.scrollIntoView({ block: 'nearest' });
+  }
 }
 
 function appendSimulcastSpeakerLog(
@@ -660,6 +681,10 @@ function appendSimulcastSpeakerLog(
     spkChg: subtitle.spkChg || SIMULCAST_SUBTITLE_START_EVENTS.has(subtitle.event ?? 0),
     replaceText: !SIMULCAST_SUBTITLE_START_EVENTS.has(subtitle.event ?? 0),
     clockWall: Date.now(),
+    videoTime:
+      typeof simulcastLatestVideoClock?.currentTime === 'number'
+        ? simulcastLatestVideoClock.currentTime
+        : undefined,
   });
   if (simulcastSpeakerSegments.length > 120) {
     simulcastSpeakerSegments = simulcastSpeakerSegments.slice(-80);
@@ -669,6 +694,7 @@ function appendSimulcastSpeakerLog(
 
 function clearSimulcastStreamingOutput(): void {
   simulcastSpeakerSegments = [];
+  resetSimulcastPlayheadState();
   renderSimulcastPaired();
 }
 
@@ -694,6 +720,7 @@ function handleSimulcastUpdate(
 
   if (message?.videoClock) {
     simulcastLatestVideoClock = message.videoClock;
+    syncSubtitleToPlayhead();
   }
 
   if (
@@ -755,9 +782,15 @@ function handleSimulcastUpdate(
     }
     // 同传：把当前句叠加到视频上（新源句先出现，译文随后补上）
     if (simulcastRunning && !transcribeActive) {
-      overlaySource = text;
-      overlayTranslation = '';
-      sendSubtitleToVideo();
+      if (simulcastLatestVideoClock) {
+        // 有视频时钟：按播放头驱动叠加字幕，与画面对齐
+        syncSubtitleToPlayhead();
+      } else {
+        // 无视频（麦克风等）：一到就显示
+        overlaySource = text;
+        overlayTranslation = '';
+        sendSubtitleToVideo();
+      }
     }
     // 转写会话进行中：源字幕同时累积进转写视图
     if (transcribeActive) {
@@ -768,8 +801,12 @@ function handleSimulcastUpdate(
   if (SIMULCAST_TRANSLATION_SUBTITLE_EVENTS.has(event)) {
     appendSimulcastSpeakerLog(subtitle, 'translation', text);
     if (simulcastRunning && !transcribeActive) {
-      overlayTranslation = text;
-      sendSubtitleToVideo();
+      if (simulcastLatestVideoClock) {
+        syncSubtitleToPlayhead();
+      } else {
+        overlayTranslation = text;
+        sendSubtitleToVideo();
+      }
     }
     // 首条译文到达先预对齐；首段译音真正播放时会再校准一次。
     maybeAutoMeasureSyncDelay('subtitle');
@@ -988,6 +1025,7 @@ function resetSimulcastLocalState(options: {
   }
   overlaySource = '';
   overlayTranslation = '';
+  resetSimulcastPlayheadState();
   sendSubtitleToVideo(true); // 清除视频上字幕
   if (options.saveRecord) {
     void saveSimulcastTranslationRecord(); // 同传 → 翻译记录
@@ -1104,6 +1142,10 @@ const SIMULCAST_TRANSLATED_AUDIO_PLAYING_STATUS = '同声传译运行中：正�
 let overlaySource = '';
 let overlayTranslation = '';
 
+// 卡拉OK式播放头驱动：当前高亮的源句 id + 去重键（避免每帧重复下发/重渲染）
+let simulcastActiveSourceId: string | null = null;
+let simulcastPlayheadKey = '';
+
 /** 把当前句下发到内容脚本，在视频上叠加字幕。 */
 function sendSubtitleToVideo(clear = false): void {
   const mode = getControlValue('simulcast-subtitle-mode', 'bilingual');
@@ -1114,6 +1156,41 @@ function sendSubtitleToVideo(clear = false): void {
     translation: overlayTranslation,
     mode,
   }).catch(() => undefined);
+}
+
+/**
+ * 卡拉OK式同步：用主视频播放头 currentTime 选出当前应显示的源句，
+ * 驱动「视频叠加字幕」与「面板高亮」。暂停→冻结、回退→跟随当前帧。
+ * 仅在有视频时钟时生效；无视频（麦克风等）走「一到就显示」回退。
+ */
+function syncSubtitleToPlayhead(): void {
+  if (!simulcastRunning || transcribeActive) return;
+  const currentTime = simulcastLatestVideoClock?.currentTime;
+  if (typeof currentTime !== 'number' || !Number.isFinite(currentTime)) return;
+
+  const sources = simulcastSpeakerSegments.filter((s) => s.channel === 'source');
+  const translations = simulcastSpeakerSegments.filter((s) => s.channel === 'translation');
+  const idx = pickActiveSegmentIndex(sources, currentTime);
+  const activeId = idx >= 0 ? sources[idx].id : null;
+  const src = idx >= 0 ? sources[idx].text : '';
+  const tr = idx >= 0 ? translations[idx]?.text ?? '' : '';
+
+  const key = `${activeId ?? ''} ${src} ${tr}`;
+  if (key === simulcastPlayheadKey) return;
+  const idChanged = activeId !== simulcastActiveSourceId;
+  simulcastPlayheadKey = key;
+  simulcastActiveSourceId = activeId;
+
+  overlaySource = src;
+  overlayTranslation = tr;
+  sendSubtitleToVideo(idx < 0);
+
+  if (idChanged) renderSimulcastPaired();
+}
+
+function resetSimulcastPlayheadState(): void {
+  simulcastActiveSourceId = null;
+  simulcastPlayheadKey = '';
 }
 
 // 自动同传：开关持久化 + 触发去抖

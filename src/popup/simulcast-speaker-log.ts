@@ -10,6 +10,8 @@ export interface SimulcastSpeakerUpdate {
   replaceText?: boolean;
   /** 墙钟时刻(ms)：火山实时 AST 不给可用 startTime，用墙钟时间做分段时间戳。 */
   clockWall?: number;
+  /** 该轮次首次出现时主视频的播放位置(秒)；用于按视频时间显示时间戳。 */
+  videoTime?: number;
 }
 
 export interface SimulcastSpeakerSegment {
@@ -22,6 +24,8 @@ export interface SimulcastSpeakerSegment {
   text: string;
   /** 该轮次首次出现的墙钟时刻(ms)；渲染时相对会话起点格式化。 */
   clockWall: number;
+  /** 该轮次首次出现时主视频的播放位置(秒)；优先用它显示时间戳。 */
+  videoTime?: number;
 }
 
 const UNKNOWN_SPEAKER_ID = '__unknown__';
@@ -59,6 +63,29 @@ export function formatSimulcastTimestamp(value: number | undefined): string {
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+}
+
+/**
+ * 卡拉OK式：按主视频播放头(秒)挑出当前应显示的源句序号。
+ * 返回最后一个「videoTime 已被播放头越过(含容差)」的段；播放头早于首段时返回 -1。
+ * 容差吸收 live 边缘的采样抖动，避免刚打戳的最新句被瞬时回退到上一句。
+ */
+export function pickActiveSegmentIndex(
+  sources: Pick<SimulcastSpeakerSegment, 'videoTime'>[],
+  currentTime: number,
+  toleranceSec = 0.5
+): number {
+  if (!Number.isFinite(currentTime)) {
+    return -1;
+  }
+  let active = -1;
+  for (let i = 0; i < sources.length; i += 1) {
+    const t = sources[i].videoTime;
+    if (typeof t === 'number' && Number.isFinite(t) && t <= currentTime + toleranceSec) {
+      active = i;
+    }
+  }
+  return active;
 }
 
 export function reduceSimulcastSpeakerSegments(
@@ -103,6 +130,10 @@ export function reduceSimulcastSpeakerSegments(
       endTime,
       text,
       clockWall: typeof update.clockWall === 'number' ? update.clockWall : 0,
+      videoTime:
+        typeof update.videoTime === 'number' && Number.isFinite(update.videoTime)
+          ? Math.max(0, update.videoTime)
+          : undefined,
     },
   ];
 }
