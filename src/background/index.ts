@@ -1088,13 +1088,20 @@ let contextMenuListenerBound = false;
 
 function removeAllContextMenus(): Promise<void> {
   return new Promise((resolve) => {
-    chrome.contextMenus.removeAll(() => resolve());
+    chrome.contextMenus.removeAll(() => {
+      // 读取 lastError 以消除「Unchecked runtime.lastError: No SW」（SW 生命周期瞬态）
+      void chrome.runtime.lastError;
+      resolve();
+    });
   });
 }
 
 function createContextMenu(options: chrome.contextMenus.CreateProperties): Promise<void> {
   return new Promise((resolve) => {
-    chrome.contextMenus.create(options, () => resolve());
+    chrome.contextMenus.create(options, () => {
+      void chrome.runtime.lastError;
+      resolve();
+    });
   });
 }
 
@@ -1162,7 +1169,7 @@ async function refreshContextMenus(): Promise<void> {
       });
     }
   } catch (error) {
-    Logger.error('[Background] 更新右键菜单失败:', error);
+    Logger.error('[Background] 更新右键菜单失败:', stringifyError(error));
   }
 }
 
@@ -1411,7 +1418,11 @@ async function initialize(): Promise<void> {
     // 初始化设置
     await initializeSettings();
 
-    localStoreSyncService.initialize();
+    try {
+      localStoreSyncService.initialize();
+    } catch (error) {
+      Logger.warn('[Background] localStore 同步服务初始化失败', stringifyError(error));
+    }
 
     // 初始化 Local Store（健康检查 + 首次迁移）
     try {
@@ -1434,7 +1445,7 @@ async function initialize(): Promise<void> {
 
     Logger.info('[Background] 后台服务初始化完成');
   } catch (error) {
-    Logger.error('[Background] 后台服务初始化失败:', error);
+    Logger.error('[Background] 后台服务初始化失败:', stringifyError(error));
   }
 }
 
