@@ -23,6 +23,10 @@ describe('simulcast offscreen build assets', () => {
       join(process.cwd(), 'src', 'offscreen', 'simulcast-audio.ts'),
       'utf8'
     );
+    const queueSource = readFileSync(
+      join(process.cwd(), 'src', 'offscreen', 'translated-audio-queue.ts'),
+      'utf8'
+    );
 
     expect(source).toContain('VolcengineAstSession');
     expect(source).toContain('PcmChunker');
@@ -36,17 +40,15 @@ describe('simulcast offscreen build assets', () => {
     expect(source).toContain('updateActivePlaybackSettings');
     expect(source).toContain("message.type === 'simulcast:offscreenUpdatePlayback'");
     expect(source).toContain('activeOriginalGain.gain.value = getOriginalPlaybackVolume(session)');
-    expect(source).toContain('audio.volume = getTranslatedPlaybackVolume(session)');
-    expect(source).toContain('activeTranslatedAudioTimers');
-    expect(source).toContain('activeTranslatedAudioUrls');
+    expect(source).toContain('TranslatedAudioPlaybackQueue');
+    expect(source).toContain('translatedAudioQueue.enqueue');
+    expect(source).toContain('translatedAudioQueue.updateActiveVolume');
+    expect(source).toContain('translatedAudioQueue.stop');
     expect(source).toContain('stopTranslatedAudios');
     expect(source).toContain('normalizeSimulcastPlaybackDelayMs');
-    expect(source).toContain('译音已返回，但浏览器播放失败');
     expect(source).toContain('translatedAudio');
-    expect(source).toContain('playback-started');
-    expect(source).toContain('playback-ended');
-    expect(source).toContain('Date.now()');
+    expect(queueSource).toContain('playback-started');
+    expect(queueSource).toContain('playback-ended');
     expect(source).toContain('cleanupFailedCapture');
-    expect(source).toContain('new Audio');
   });
 });

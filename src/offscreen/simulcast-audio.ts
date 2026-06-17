@@ -3,6 +3,10 @@ import { resolveAstLanguagePair } from './ast-language';
 import { VolcengineAstSession, type AstWebSocketLike } from './volcengine-ast-session';
 import { VOLCENGINE_AST_EVENTS } from '@/translation/volcengine-ast-protobuf';
 import { normalizeSimulcastPlaybackDelayMs } from './simulcast-delay';
+import {
+  TranslatedAudioPlaybackQueue,
+  type TranslatedAudioPlaybackEvent,
+} from './translated-audio-queue';
 
 interface SimulcastOffscreenStartMessage {
   type: 'simulcast:offscreenStart';
@@ -46,13 +50,6 @@ interface SimulcastOffscreenUpdatePlaybackMessage {
   translatedAudioDelayMs?: number;
 }
 
-interface SimulcastTranslatedAudioPlaybackEvent {
-  event: 'playback-started' | 'playback-ended';
-  segmentId: number;
-  wallTimeMs: number;
-  delayMs: number;
-}
-
 type SimulcastOffscreenMessage =
   | SimulcastOffscreenStartMessage
   | SimulcastOffscreenStopMessage
@@ -74,9 +71,7 @@ let activeSession: SimulcastOffscreenStartMessage['session'] | null = null;
 let ttsChunks: Uint8Array[] = [];
 let nextTtsSegmentId = 1;
 let activeTtsSegmentId = 0;
-let activeTranslatedAudio: HTMLAudioElement | null = null;
-const activeTranslatedAudioUrls = new Map<HTMLAudioElement, string>();
-let activeTranslatedAudioTimers: number[] = [];
+const translatedAudioQueue = new TranslatedAudioPlaybackQueue();
 // 转写录音（仅 recordAudio 会话）
 let activeRecorder: MediaRecorder | null = null;
 let recordedChunks: Blob[] = [];
@@ -158,34 +153,11 @@ function finalizeRecording(): void {
   }
 }
 
-function clearTranslatedAudioTimers(): void {
-  activeTranslatedAudioTimers.forEach((timerId) => window.clearTimeout(timerId));
-  activeTranslatedAudioTimers = [];
-}
-
-function cleanupTranslatedAudio(audio: HTMLAudioElement): void {
-  const url = activeTranslatedAudioUrls.get(audio);
-  if (url) {
-    URL.revokeObjectURL(url);
-  }
-  activeTranslatedAudioUrls.delete(audio);
-  if (activeTranslatedAudio === audio) {
-    activeTranslatedAudio = null;
-  }
-}
-
 function stopTranslatedAudios(): void {
-  activeTranslatedAudioUrls.forEach((url, audio) => {
-    audio.pause();
-    audio.src = '';
-    URL.revokeObjectURL(url);
-  });
-  activeTranslatedAudioUrls.clear();
-  activeTranslatedAudio = null;
+  translatedAudioQueue.stop();
 }
 
 function stopActiveCapture(): void {
-  clearTranslatedAudioTimers();
   // 先收尾录音（在停轨前 stop，让 MediaRecorder 把缓冲刷出）
   finalizeRecording();
   activeProcessor?.disconnect();
@@ -278,22 +250,9 @@ function updateActivePlaybackSettings(
   if (activeOriginalGain) {
     activeOriginalGain.gain.value = getOriginalPlaybackVolume(session);
   }
-  activeTranslatedAudioUrls.forEach((_, audio) => {
-    audio.volume = getTranslatedPlaybackVolume(session);
-  });
+  translatedAudioQueue.updateActiveVolume(getTranslatedPlaybackVolume(session));
 
   return { status: 'ok', updated: true };
-}
-
-function concatChunks(chunks: Uint8Array[]): Uint8Array {
-  const length = chunks.reduce((total, chunk) => total + chunk.length, 0);
-  const output = new Uint8Array(length);
-  let offset = 0;
-  chunks.forEach((chunk) => {
-    output.set(chunk, offset);
-    offset += chunk.length;
-  });
-  return output;
 }
 
 function playTranslatedAudio(
@@ -302,73 +261,16 @@ function playTranslatedAudio(
   getVolume: () => number,
   delayMs: number,
   onPlaybackStatus?: (status: { kind: 'success' | 'error' | 'info'; message: string }) => void,
-  onTranslatedAudio?: (event: SimulcastTranslatedAudioPlaybackEvent) => void
+  onTranslatedAudio?: (event: TranslatedAudioPlaybackEvent) => void
 ): void {
-  if (!chunks.length || getVolume() <= 0) {
-    return;
-  }
-
-  const normalizedDelayMs = normalizeSimulcastPlaybackDelayMs(delayMs);
-  const startPlayback = (): void => {
-    const volume = clampVolume(getVolume(), 1);
-    if (volume <= 0) {
-      return;
-    }
-    const audioBytes = concatChunks(chunks);
-    const audioBuffer = new ArrayBuffer(audioBytes.byteLength);
-    new Uint8Array(audioBuffer).set(audioBytes);
-    const blob = new Blob([audioBuffer], { type: 'audio/ogg; codecs=opus' });
-    const url = URL.createObjectURL(blob);
-    const audio = new Audio(url);
-    audio.volume = clampVolume(volume, 1);
-    audio.onended = (): void => {
-      onTranslatedAudio?.({
-        event: 'playback-ended',
-        segmentId,
-        wallTimeMs: Date.now(),
-        delayMs: normalizedDelayMs,
-      });
-      cleanupTranslatedAudio(audio);
-    };
-    activeTranslatedAudio = audio;
-    activeTranslatedAudioUrls.set(audio, url);
-    void audio
-      .play()
-      .then(() => {
-        onTranslatedAudio?.({
-          event: 'playback-started',
-          segmentId,
-          wallTimeMs: Date.now(),
-          delayMs: normalizedDelayMs,
-        });
-        onPlaybackStatus?.({
-          kind: 'success',
-          message: '同声传译运行中：正在播放译音。',
-        });
-      })
-      .catch((error) => {
-        cleanupTranslatedAudio(audio);
-        onPlaybackStatus?.({
-          kind: 'error',
-          message: `译音已返回，但浏览器播放失败：${error instanceof Error ? error.message : String(error)}`,
-        });
-      });
-  };
-
-  if (normalizedDelayMs > 0) {
-    onPlaybackStatus?.({
-      kind: 'info',
-      message: `译音已返回，将在 ${normalizedDelayMs}ms 后播放。`,
-    });
-    const timerId = window.setTimeout(() => {
-      activeTranslatedAudioTimers = activeTranslatedAudioTimers.filter((id) => id !== timerId);
-      startPlayback();
-    }, normalizedDelayMs);
-    activeTranslatedAudioTimers.push(timerId);
-    return;
-  }
-
-  startPlayback();
+  translatedAudioQueue.enqueue({
+    segmentId,
+    chunks,
+    getVolume,
+    delayMs,
+    onPlaybackStatus,
+    onTranslatedAudio,
+  });
 }
 
 function createAstSession(message: SimulcastOffscreenStartMessage): VolcengineAstSession {
