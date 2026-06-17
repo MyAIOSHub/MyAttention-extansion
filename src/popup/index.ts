@@ -1727,6 +1727,7 @@ export function initPopup() {
 
     // 初始化 LLM 设置
     initializeLlmSettings();
+    initializeImmersiveLlmKey();
     initializeSimulcastSettings();
 
     // 初始化推荐设置
@@ -2975,6 +2976,34 @@ function initializeLlmSettings(): void {
           setTimeout(() => statusEl.classList.add('hidden'), 2000);
         }
       });
+    });
+  });
+}
+
+/** 沉浸式翻译页的 LLM API Key：与「设置」页共用 settings.llmApi.apiKey。 */
+function initializeImmersiveLlmKey(): void {
+  const input = document.getElementById('immersive-llm-api-key') as HTMLInputElement | null;
+  if (!input) return;
+
+  void Promise.all([getStoredSettings(), loadLocalCredentialPrefill()]).then(
+    ([settings, localPrefill]) => {
+      const llm = resolveLlmCredentialPrefill(
+        settings?.llmApi ?? DEFAULT_SETTINGS.llmApi,
+        localPrefill.llmApi
+      );
+      input.value = llm?.apiKey || '';
+    }
+  );
+
+  input.addEventListener('change', () => {
+    chrome.storage.sync.get(['settings'], (result) => {
+      const settings: AppSettings = result.settings || { ...DEFAULT_SETTINGS };
+      const base = settings.llmApi ?? DEFAULT_SETTINGS.llmApi ?? { provider: 'bailian' as const };
+      settings.llmApi = { ...base, apiKey: input.value.trim() };
+      chrome.storage.sync.set({ settings });
+      // 同步「设置」页同一字段
+      const settingsKey = document.getElementById('llm-api-key') as HTMLInputElement | null;
+      if (settingsKey) settingsKey.value = input.value;
     });
   });
 }
