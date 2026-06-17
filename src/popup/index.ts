@@ -908,9 +908,20 @@ async function handleSimulcastStartClick(): Promise<void> {
     simulcastRunning = true;
     simulcastFirstSourceWall = 0;
     simulcastSyncMeasured = false;
+    updateSimulcastControls();
   } catch (error) {
     setTranslationStatus('simulcast-status', getErrorMessage(error), 'error');
   }
+}
+
+/** 停止仅在运行中显示；开始按钮在空闲时占满整行。 */
+function updateSimulcastControls(): void {
+  const start = document.getElementById('simulcast-start-btn');
+  const stop = document.getElementById('simulcast-stop-btn');
+  start?.classList.toggle('hidden', simulcastRunning);
+  start?.classList.toggle('col-span-2', !simulcastRunning);
+  stop?.classList.toggle('hidden', !simulcastRunning);
+  stop?.classList.toggle('col-span-2', simulcastRunning);
 }
 
 async function handleSimulcastStopClick(): Promise<void> {
@@ -929,6 +940,7 @@ async function handleSimulcastStopClick(): Promise<void> {
     setTranslationStatus('simulcast-status', getErrorMessage(error), 'error');
   } finally {
     simulcastRunning = false;
+    updateSimulcastControls();
     void sendVideoSync(false, 0); // 还原视频延迟
     overlaySource = '';
     overlayTranslation = '';
@@ -1488,6 +1500,7 @@ function initializeTranslationActions(): void {
   document.getElementById('simulcast-stop-btn')?.addEventListener('click', () => {
     void handleSimulcastStopClick();
   });
+  updateSimulcastControls();
 
   document.getElementById('transcribe-start-btn')?.addEventListener('click', () => {
     // 文件/链接：handleTranscribeViaSayso 内部自处理「取消(abort)」；标签页/麦克风：开始
