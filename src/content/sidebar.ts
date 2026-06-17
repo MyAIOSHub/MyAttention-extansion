@@ -22,6 +22,7 @@ const CLASS_NAMES = {
   MINI_BTN: 'sidebar-mini-btn',
   CLOSE_BTN: 'sidebar-close-btn',
   CONTENT: 'sidebar-content',
+  RESIZE_HANDLE: 'sidebar-resize-handle',
 } as const;
 
 /**
@@ -57,6 +58,13 @@ let miniBtnElement: HTMLButtonElement | null = null;
  * 是否处于小窗口模式（会话内保持）
  */
 let miniMode = false;
+
+/**
+ * 左缘缩放手柄 + 停靠宽度（拖拽调整，持久化）
+ */
+let resizeHandleElement: HTMLDivElement | null = null;
+let dockedWidth = SIDEBAR_WIDTH;
+let isResizing = false;
 
 /**
  * 样式元素
@@ -328,6 +336,37 @@ function injectStyles(): void {
       border: none;
       border-radius: 0;
     }
+
+    /* 左缘缩放手柄 */
+    .${CLASS_NAMES.RESIZE_HANDLE} {
+      position: absolute;
+      top: 0;
+      left: -3px;
+      width: 8px;
+      height: 100%;
+      cursor: ew-resize;
+      z-index: 2;
+    }
+
+    .${CLASS_NAMES.RESIZE_HANDLE}::after {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 3px;
+      width: 2px;
+      height: 100%;
+      background: transparent;
+      transition: background 0.15s ease;
+    }
+
+    .${CLASS_NAMES.RESIZE_HANDLE}:hover::after {
+      background: var(--primary-color, rgba(94, 106, 210, 0.6));
+    }
+
+    /* 小窗口态不缩放宽度，隐藏手柄 */
+    #${SIDEBAR_ID}.mini .${CLASS_NAMES.RESIZE_HANDLE} {
+      display: none;
+    }
   `;
 
   document.head.appendChild(style);
@@ -356,6 +395,7 @@ function handleMiniClick(): void {
   if (miniBtnElement) {
     miniBtnElement.title = miniMode ? '还原侧栏' : '小窗口';
   }
+  applyDockedWidth(); // 停靠态恢复拖拽宽度；小窗口态清内联宽度交给 CSS
   Logger.debug(`[Sidebar] 小窗口模式：${miniMode ? '开' : '关'}`);
 }
 
@@ -377,6 +417,71 @@ function removeCloseListener(): void {
   miniBtnElement?.removeEventListener('click', handleMiniClick);
 
   Logger.debug('[Sidebar] 标题栏按钮事件监听已移除');
+}
+
+// ============================================================================
+// 宽度缩放（左缘拖拽）
+// ============================================================================
+
+/**
+ * 应用停靠宽度：停靠态用拖拽宽度；小窗口态交给 CSS（不设内联宽度）。
+ */
+function applyDockedWidth(): void {
+  if (!sidebarElement) return;
+  sidebarElement.style.width = miniMode ? '' : `${dockedWidth}px`;
+}
+
+/** 把宽度夹到 [320, min(900, 96vw)]。 */
+function clampWidth(w: number): number {
+  const max = Math.min(900, window.innerWidth * 0.96);
+  return Math.max(320, Math.min(max, w));
+}
+
+function onResizeMove(e: MouseEvent): void {
+  if (!isResizing) return;
+  // 侧栏靠右：宽度 = 视口右边 − 鼠标 X
+  dockedWidth = clampWidth(window.innerWidth - e.clientX);
+  applyDockedWidth();
+}
+
+function onResizeUp(): void {
+  if (!isResizing) return;
+  isResizing = false;
+  document.removeEventListener('mousemove', onResizeMove);
+  document.removeEventListener('mouseup', onResizeUp);
+  // 还原 iframe 交互
+  const iframe = sidebarElement?.querySelector('iframe') as HTMLElement | null;
+  if (iframe) iframe.style.pointerEvents = '';
+  document.body.style.userSelect = '';
+  try {
+    chrome.storage.local.set({ sidebarWidth: dockedWidth });
+  } catch {
+    // 忽略存储失败
+  }
+}
+
+function onResizeDown(e: MouseEvent): void {
+  if (miniMode) return; // 小窗口态不缩放宽度
+  e.preventDefault();
+  isResizing = true;
+  // 拖拽时禁用 iframe 命中，否则鼠标移到 iframe 上事件丢失
+  const iframe = sidebarElement?.querySelector('iframe') as HTMLElement | null;
+  if (iframe) iframe.style.pointerEvents = 'none';
+  document.body.style.userSelect = 'none';
+  document.addEventListener('mousemove', onResizeMove);
+  document.addEventListener('mouseup', onResizeUp);
+}
+
+/**
+ * 创建左缘缩放手柄
+ */
+function createResizeHandle(): HTMLDivElement {
+  const handle = document.createElement('div');
+  handle.className = CLASS_NAMES.RESIZE_HANDLE;
+  handle.title = '拖拽调整宽度';
+  handle.addEventListener('mousedown', onResizeDown);
+  resizeHandleElement = handle;
+  return handle;
 }
 
 // ============================================================================
@@ -407,6 +512,9 @@ export function createSidebar(): HTMLDivElement {
   const content = createContent();
   sidebarElement.appendChild(content);
 
+  // 左缘缩放手柄
+  sidebarElement.appendChild(createResizeHandle());
+
   // // 添加样式
   injectStyles();
 
@@ -419,6 +527,19 @@ export function createSidebar(): HTMLDivElement {
   // 恢复会话内的小窗口模式
   if (miniMode) {
     sidebarElement.classList.add('mini');
+  }
+
+  // 恢复持久化的停靠宽度
+  try {
+    chrome.storage.local.get('sidebarWidth', (r) => {
+      const w = r?.sidebarWidth;
+      if (typeof w === 'number' && w >= 320) {
+        dockedWidth = w;
+      }
+      applyDockedWidth();
+    });
+  } catch {
+    applyDockedWidth();
   }
 
   Logger.info('[Sidebar] 注入式侧边栏已创建');
@@ -491,10 +612,16 @@ export function cleanupSidebar(): void {
     Logger.debug('[Sidebar] 侧边栏样式已移除');
   }
 
+  // 清理可能残留的拖拽监听
+  document.removeEventListener('mousemove', onResizeMove);
+  document.removeEventListener('mouseup', onResizeUp);
+  isResizing = false;
+
   // 重置引用
   sidebarElement = null;
   closeBtnElement = null;
   miniBtnElement = null;
+  resizeHandleElement = null;
 }
 
 /**
