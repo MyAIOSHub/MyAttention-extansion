@@ -1606,11 +1606,6 @@
 
     <!-- 转写标签页（复用同传 AST s2t 实时源字幕） -->
     <div id="transcribe-content" class="tab-content hidden flex-1 flex flex-col p-2">
-      <div class="mb-3">
-        <h2 class="text-sm font-semibold text-gray-800">转写</h2>
-        <p class="text-xs text-gray-500">捕获 标签页 / 麦克风 / 文件 / 链接 音频，实时转成文字</p>
-      </div>
-
       <!-- 来源：4-tab 置顶 -->
       <div class="grid grid-cols-4 gap-1 mb-2 p-0.5 bg-gray-100 rounded-lg flex-shrink-0">
         <button id="transcribe-source-tab" type="button" class="transcribe-source-btn active px-2 py-1.5 text-xs rounded-md" data-source="tab">
@@ -1629,9 +1624,18 @@
       <input id="transcribe-file" type="file" accept="audio/*,video/*" class="hidden w-full text-xs mb-2 file:mr-2 file:rounded file:border-0 file:bg-gray-100 file:px-2 file:py-1 file:text-xs flex-shrink-0">
       <input id="transcribe-url" type="url" placeholder="直链音视频 URL（mp3/mp4/wav/m4a）" class="hidden w-full text-sm border border-gray-200 rounded-lg px-2 py-2 mb-2 flex-shrink-0">
 
-      <!-- 转写模式（文件/链接走 Say-So-Scribe 后端，5 档） -->
+      <div class="mb-2">
+        <h2 class="text-sm font-semibold text-gray-800">转写</h2>
+        <p class="text-xs text-gray-500">标签页 / 麦克风：实时转写；文件 / 链接：选模式批量转写，输出带时间戳·说话人。</p>
+      </div>
+
+      <!-- 转写模式（仅文件/链接，走 Say-So-Scribe 多引擎，5 档） -->
       <div id="transcribe-mode-wrap" class="hidden mb-2 flex-shrink-0">
-        <div class="text-xs font-medium text-gray-600 mb-1">模式（Say-So-Scribe）</div>
+        <div class="text-xs font-medium text-gray-600 mb-1">模式（Say-So-Scribe 多引擎）</div>
+        <p class="text-[10px] leading-snug text-gray-400 mb-1.5">
+          猎豹 / 隼 = 火山，海豚 / 鲸鱼 = 阿里，多语言 = Google（多语种）。
+          速度 猎豹 &gt; 海豚 &gt; 鲸鱼 &gt; 隼，精度反之；默认鲸鱼。
+        </p>
         <div id="transcribe-mode-cards" class="grid grid-cols-3 gap-1.5"></div>
       </div>
 
