@@ -19,6 +19,7 @@ const CLASS_NAMES = {
   HEADER_LEFT: 'sidebar-header-left',
   LOGO: 'sidebar-logo',
   TITLE: 'sidebar-title',
+  MINI_BTN: 'sidebar-mini-btn',
   CLOSE_BTN: 'sidebar-close-btn',
   CONTENT: 'sidebar-content',
 } as const;
@@ -48,6 +49,16 @@ let sidebarElement: HTMLDivElement | null = null;
 let closeBtnElement: HTMLButtonElement | null = null;
 
 /**
+ * 小窗口（迷你浮窗）切换按钮
+ */
+let miniBtnElement: HTMLButtonElement | null = null;
+
+/**
+ * 是否处于小窗口模式（会话内保持）
+ */
+let miniMode = false;
+
+/**
  * 样式元素
  */
 let styleElement: HTMLStyleElement | null = null;
@@ -63,6 +74,16 @@ function createCloseIcon(): string {
   return `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <line x1="18" y1="6" x2="6" y2="18"></line>
         <line x1="6" y1="6" x2="18" y2="18"></line>
+      </svg>`;
+}
+
+/**
+ * 小窗口图标（画中画样式）
+ */
+function createMiniIcon(): string {
+  return `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round">
+        <rect x="3" y="5" width="18" height="14" rx="2"></rect>
+        <rect x="12.5" y="11.5" width="6.5" height="5" rx="1" fill="currentColor" stroke="none"></rect>
       </svg>`;
 }
 
@@ -125,15 +146,22 @@ function createHeader(): HTMLDivElement {
   headerLeft.appendChild(logo);
   headerLeft.appendChild(title);
 
+  const miniBtn = document.createElement('button');
+  miniBtn.className = CLASS_NAMES.MINI_BTN;
+  miniBtn.title = miniMode ? '还原侧栏' : '小窗口';
+  miniBtn.innerHTML = createMiniIcon();
+
   const closeBtn = document.createElement('button');
   closeBtn.className = CLASS_NAMES.CLOSE_BTN;
   closeBtn.title = '关闭';
   closeBtn.innerHTML = createCloseIcon();
 
   header.appendChild(headerLeft);
+  header.appendChild(miniBtn);
   header.appendChild(closeBtn);
 
-  // 保存关闭按钮引用
+  // 保存按钮引用
+  miniBtnElement = miniBtn;
   closeBtnElement = closeBtn;
 
   Logger.debug('[Sidebar] 标题栏已创建');
@@ -195,6 +223,19 @@ function injectStyles(): void {
       border-left: 1px solid rgba(0, 0, 0, 0.08);
     }
 
+    /* 小窗口（迷你浮窗）模式：右上角圆角卡片，非全高 */
+    #${SIDEBAR_ID}.mini {
+      top: 12px;
+      right: 12px;
+      width: min(400px, 92vw);
+      height: min(640px, calc(100vh - 24px));
+      border-radius: 14px;
+      overflow: hidden;
+      border-left: none;
+      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.20),
+                  0 4px 12px rgba(0, 0, 0, 0.10);
+    }
+
     .${CLASS_NAMES.SIDEBAR} {
       position: relative;
       display: flex;
@@ -236,6 +277,7 @@ function injectStyles(): void {
       min-width: 0;
     }
 
+    .${CLASS_NAMES.MINI_BTN},
     .${CLASS_NAMES.CLOSE_BTN} {
       display: flex;
       align-items: center;
@@ -249,19 +291,27 @@ function injectStyles(): void {
       color: #6b7280;
       cursor: pointer;
       transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-      margin-left: 8px;
+      margin-left: 4px;
       flex-shrink: 0;
     }
 
+    .${CLASS_NAMES.MINI_BTN}:hover,
     .${CLASS_NAMES.CLOSE_BTN}:hover {
       background: rgba(0, 0, 0, 0.05);
       color: #374151;
       transform: scale(1.05);
     }
 
+    .${CLASS_NAMES.MINI_BTN}:active,
     .${CLASS_NAMES.CLOSE_BTN}:active {
       background: rgba(0, 0, 0, 0.1);
       transform: scale(0.95);
+    }
+
+    /* 小窗口模式下，按钮高亮表示已激活 */
+    #${SIDEBAR_ID}.mini .${CLASS_NAMES.MINI_BTN} {
+      background: var(--primary-light, rgba(94, 106, 210, 0.12));
+      color: var(--primary-color, #5e6ad2);
     }
 
     .${CLASS_NAMES.CONTENT} {
@@ -297,29 +347,36 @@ function handleCloseClick(): void {
 }
 
 /**
- * 添加关闭按钮事件监听
+ * 处理小窗口按钮点击：在「全高侧栏」与「右上角浮窗」之间切换
  */
-function addCloseListener(): void {
-  if (!closeBtnElement) {
-    return;
+function handleMiniClick(): void {
+  miniMode = !miniMode;
+  const sidebar = document.getElementById(SIDEBAR_ID);
+  sidebar?.classList.toggle('mini', miniMode);
+  if (miniBtnElement) {
+    miniBtnElement.title = miniMode ? '还原侧栏' : '小窗口';
   }
-
-  closeBtnElement.addEventListener('click', handleCloseClick);
-
-  Logger.debug('[Sidebar] 关闭按钮事件监听已添加');
+  Logger.debug(`[Sidebar] 小窗口模式：${miniMode ? '开' : '关'}`);
 }
 
 /**
- * 移除关闭按钮事件监听
+ * 添加标题栏按钮事件监听（关闭 + 小窗口）
+ */
+function addCloseListener(): void {
+  closeBtnElement?.addEventListener('click', handleCloseClick);
+  miniBtnElement?.addEventListener('click', handleMiniClick);
+
+  Logger.debug('[Sidebar] 标题栏按钮事件监听已添加');
+}
+
+/**
+ * 移除标题栏按钮事件监听
  */
 function removeCloseListener(): void {
-  if (!closeBtnElement) {
-    return;
-  }
+  closeBtnElement?.removeEventListener('click', handleCloseClick);
+  miniBtnElement?.removeEventListener('click', handleMiniClick);
 
-  closeBtnElement.removeEventListener('click', handleCloseClick);
-
-  Logger.debug('[Sidebar] 关闭按钮事件监听已移除');
+  Logger.debug('[Sidebar] 标题栏按钮事件监听已移除');
 }
 
 // ============================================================================
@@ -358,6 +415,11 @@ export function createSidebar(): HTMLDivElement {
 
   // 添加到页面
   document.body.appendChild(sidebarElement);
+
+  // 恢复会话内的小窗口模式
+  if (miniMode) {
+    sidebarElement.classList.add('mini');
+  }
 
   Logger.info('[Sidebar] 注入式侧边栏已创建');
 
@@ -432,6 +494,7 @@ export function cleanupSidebar(): void {
   // 重置引用
   sidebarElement = null;
   closeBtnElement = null;
+  miniBtnElement = null;
 }
 
 /**
