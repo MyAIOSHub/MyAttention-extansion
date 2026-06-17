@@ -5,6 +5,7 @@ export interface TranslatedAudioPlaybackEvent {
   segmentId: number;
   wallTimeMs: number;
   delayMs: number;
+  playbackRate: number;
 }
 
 export interface TranslatedAudioQueueItem {
@@ -46,6 +47,24 @@ function clampVolume(value: number | undefined, fallback: number): number {
     return fallback;
   }
   return Math.min(1, Math.max(0, value));
+}
+
+function computeAdaptivePlaybackRate(pendingSegments: number): number {
+  if (pendingSegments <= 0) {
+    return 1;
+  }
+  if (pendingSegments === 1) {
+    return 1.06;
+  }
+  return 1.12;
+}
+
+function setAudioPlaybackRate(audio: HTMLAudioElement, playbackRate: number): void {
+  audio.playbackRate = playbackRate;
+  const pitchPreservingAudio = audio as HTMLAudioElement & { preservesPitch?: boolean };
+  if ('preservesPitch' in pitchPreservingAudio) {
+    pitchPreservingAudio.preservesPitch = true;
+  }
 }
 
 export class TranslatedAudioPlaybackQueue {
@@ -91,6 +110,7 @@ export class TranslatedAudioPlaybackQueue {
       normalizedDelayMs,
       notBeforeMs: this.dependencies.now() + normalizedDelayMs,
     });
+    this.updateActivePlaybackRate();
     this.scheduleNext();
   }
 
@@ -156,6 +176,7 @@ export class TranslatedAudioPlaybackQueue {
     const generation = this.generation;
 
     audio.volume = volume;
+    setAudioPlaybackRate(audio, computeAdaptivePlaybackRate(this.queue.length));
     audio.onended = (): void => {
       if (this.activeAudio !== audio || this.generation !== generation) return;
       item.onTranslatedAudio?.({
@@ -163,6 +184,7 @@ export class TranslatedAudioPlaybackQueue {
         segmentId: item.segmentId,
         wallTimeMs: this.dependencies.now(),
         delayMs: item.normalizedDelayMs,
+        playbackRate: audio.playbackRate,
       });
       this.cleanupActiveAudio();
       this.scheduleNext();
@@ -179,6 +201,7 @@ export class TranslatedAudioPlaybackQueue {
           segmentId: item.segmentId,
           wallTimeMs: this.dependencies.now(),
           delayMs: item.normalizedDelayMs,
+          playbackRate: audio.playbackRate,
         });
         item.onPlaybackStatus?.({
           kind: 'success',
@@ -202,5 +225,11 @@ export class TranslatedAudioPlaybackQueue {
     }
     this.activeAudio = null;
     this.activeUrl = null;
+  }
+
+  private updateActivePlaybackRate(): void {
+    if (this.activeAudio) {
+      setAudioPlaybackRate(this.activeAudio, computeAdaptivePlaybackRate(this.queue.length));
+    }
   }
 }

@@ -8,6 +8,7 @@ class FakeAudio {
   src = '';
   readonly play = vi.fn().mockResolvedValue(undefined);
   readonly pause = vi.fn();
+  playbackRate = 1;
 
   constructor(readonly url: string) {
     this.src = url;
@@ -113,5 +114,44 @@ describe('TranslatedAudioPlaybackQueue', () => {
 
     expect(audios).toHaveLength(0);
     expect(queue.size).toBe(0);
+  });
+
+  it('slightly accelerates translated TTS playback only while later segments are queued', async () => {
+    const { audios, queue } = makeQueue();
+
+    queue.enqueue({
+      segmentId: 1,
+      chunks: [new Uint8Array([1])],
+      getVolume: () => 1,
+      delayMs: 0,
+    });
+
+    expect(audios[0].playbackRate).toBe(1);
+
+    queue.enqueue({
+      segmentId: 2,
+      chunks: [new Uint8Array([2])],
+      getVolume: () => 1,
+      delayMs: 0,
+    });
+    queue.enqueue({
+      segmentId: 3,
+      chunks: [new Uint8Array([3])],
+      getVolume: () => 1,
+      delayMs: 0,
+    });
+
+    expect(audios[0].playbackRate).toBe(1.12);
+
+    audios[0].end();
+    await Promise.resolve();
+
+    expect(audios[1].playbackRate).toBeGreaterThan(1);
+    expect(audios[1].playbackRate).toBeLessThanOrEqual(1.12);
+
+    audios[1].end();
+    await Promise.resolve();
+
+    expect(audios[2].playbackRate).toBe(1);
   });
 });
