@@ -77,14 +77,18 @@ export async function transcribeViaSayso(
     throw new Error('文件过大（上限 200MB）');
   }
   if (!resp.ok) {
-    let msg = `转写失败 (${resp.status})`;
+    let raw = '';
     try {
       const j = await resp.json();
-      if (j?.error) msg += `：${j.error}`;
+      raw = typeof j?.error === 'string' ? j.error : '';
     } catch {
       // ignore parse error
     }
-    throw new Error(msg);
+    // 各家「无有效语音/静音」错误 → 友好提示（火山 20000003 / 阿里 NO_VALID_FRAGMENT）
+    if (/no valid speech|silence|20000003|NO_VALID_FRAGMENT/i.test(raw)) {
+      throw new Error('音频中未检测到有效语音（文件可能是静音或无人声）。请确认该文件能正常播放出声，或换一个有语音的文件。');
+    }
+    throw new Error(`转写失败 (${resp.status})${raw ? `：${raw}` : ''}`);
   }
 
   return (await resp.json()) as SaysoResult;
