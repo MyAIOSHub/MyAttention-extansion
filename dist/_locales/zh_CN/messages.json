@@ -147,7 +147,7 @@
       "message": "帮助用户自动保存 ChatGPT、Gemini、Claude 等 AI 平台聊天记录"
    },
    "extensionName": {
-      "message": "SaySo Snip"
+      "message": "SaySo Scribe"
    },
    "fallbackHowToStart": {
       "message": "如何开始"
