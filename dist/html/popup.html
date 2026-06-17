@@ -1652,12 +1652,12 @@
         <div id="transcribe-mode-cards" class="grid grid-cols-3 gap-1.5"></div>
       </div>
 
-      <!-- 开始/停止 置顶 -->
+      <!-- 开始/停止 置顶。停止仅运行中显示 -->
       <div class="grid grid-cols-2 gap-2 mb-2 flex-shrink-0">
-        <button id="transcribe-start-btn" class="py-2 text-xs font-medium btn-brand text-white rounded-lg hover:btn-brand transition-colors flex items-center justify-center gap-2">
+        <button id="transcribe-start-btn" class="col-span-2 py-2 text-xs font-medium btn-brand text-white rounded-lg hover:btn-brand transition-colors flex items-center justify-center gap-2">
           <i id="transcribe-start-icon" class="fas fa-circle text-[8px]"></i><span id="transcribe-start-label">开始转写</span>
         </button>
-        <button id="transcribe-stop-btn" class="py-2 text-xs font-medium bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors flex items-center justify-center gap-2">
+        <button id="transcribe-stop-btn" class="hidden py-2 text-xs font-medium bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors flex items-center justify-center gap-2">
           <i class="fas fa-stop text-[10px]"></i>停止
         </button>
       </div>

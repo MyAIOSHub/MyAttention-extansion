@@ -1223,16 +1223,26 @@ function setTranscribeStatus(text: string, kind: 'info' | 'success' | 'error'): 
  * - 文件/链接=一次性(自动收尾) → 仅一个按钮，运行中显示「取消」，隐藏停止
  */
 function updateTranscribeControls(): void {
+  const startBtn = document.getElementById('transcribe-start-btn');
   const stopBtn = document.getElementById('transcribe-stop-btn');
   const startLabel = document.getElementById('transcribe-start-label');
   const startIcon = document.getElementById('transcribe-start-icon');
   const isMedia = transcribeSource === 'file' || transcribeSource === 'url';
-  stopBtn?.classList.toggle('hidden', isMedia);
-  if (startLabel) {
-    startLabel.textContent = isMedia && transcribeActive ? '取消' : '开始转写';
-  }
-  if (startIcon) {
-    startIcon.className = `fas ${isMedia && transcribeActive ? 'fa-xmark' : 'fa-circle text-[8px]'}`;
+
+  if (isMedia) {
+    // 文件/链接：一次性。运行中 开始 变「取消」，不显示停止
+    stopBtn?.classList.add('hidden');
+    startBtn?.classList.add('col-span-2');
+    if (startLabel) startLabel.textContent = transcribeActive ? '取消' : '开始转写';
+    if (startIcon) startIcon.className = `fas ${transcribeActive ? 'fa-xmark' : 'fa-circle text-[8px]'}`;
+  } else {
+    // 标签页/麦克风：实时。开始/停止互斥，停止仅运行中显示
+    if (startLabel) startLabel.textContent = '开始转写';
+    if (startIcon) startIcon.className = 'fas fa-circle text-[8px]';
+    startBtn?.classList.toggle('hidden', transcribeActive);
+    startBtn?.classList.toggle('col-span-2', !transcribeActive);
+    stopBtn?.classList.toggle('hidden', !transcribeActive);
+    stopBtn?.classList.toggle('col-span-2', transcribeActive);
   }
 }
 
@@ -1306,8 +1316,25 @@ async function handleTranscribeStartClick(): Promise<void> {
   } catch (error) {
     transcribeActive = false;
     updateTranscribeControls();
-    setTranscribeStatus(getErrorMessage(error), 'error');
+    setTranscribeStatus(friendlyCaptureError(getErrorMessage(error)), 'error');
   }
+}
+
+/** 把音频捕获的原始错误转成可读提示（麦克风权限/无设备等）。 */
+function friendlyCaptureError(raw: string): string {
+  const m = (raw || '').toLowerCase();
+  if (/permission dismissed|permission denied|notallowed|not allowed|权限/.test(m)) {
+    return transcribeSource === 'mic'
+      ? '麦克风权限被拒绝/取消。请在弹出的权限请求里点「允许」，或在浏览器站点设置允许本扩展使用麦克风后重试。'
+      : '捕获权限被拒绝/取消，请允许后重试。';
+  }
+  if (/notfound|device not found|no.*(audio|microphone).*device|requested device not found/.test(m)) {
+    return '未找到麦克风设备，请检查设备连接后重试。';
+  }
+  if (/in use|notreadable|could not start audio source/.test(m)) {
+    return '麦克风被其他程序占用，请关闭后重试。';
+  }
+  return raw;
 }
 
 async function handleTranscribeStopClick(): Promise<void> {
