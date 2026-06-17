@@ -23,6 +23,7 @@ const CLASS_NAMES = {
   CLOSE_BTN: 'sidebar-close-btn',
   CONTENT: 'sidebar-content',
   RESIZE_HANDLE: 'sidebar-resize-handle',
+  MINI_CORNER: 'sidebar-mini-corner',
 } as const;
 
 /**
@@ -65,6 +66,19 @@ let miniMode = false;
 let resizeHandleElement: HTMLDivElement | null = null;
 let dockedWidth = SIDEBAR_WIDTH;
 let isResizing = false;
+
+/**
+ * 标题栏元素（小窗口态作为拖动把手）
+ */
+let headerElement: HTMLDivElement | null = null;
+
+/**
+ * 小窗口态：右下角缩放角 + 浮窗位置/尺寸（持久化）+ 拖动状态
+ */
+let miniCornerElement: HTMLDivElement | null = null;
+interface MiniRect { left: number; top: number; width: number; height: number; }
+let miniRect: MiniRect | null = null;
+let miniDrag: { mode: 'move' | 'resize'; sx: number; sy: number; rect: MiniRect } | null = null;
 
 /**
  * 样式元素
@@ -168,7 +182,8 @@ function createHeader(): HTMLDivElement {
   header.appendChild(miniBtn);
   header.appendChild(closeBtn);
 
-  // 保存按钮引用
+  // 保存引用
+  headerElement = header;
   miniBtnElement = miniBtn;
   closeBtnElement = closeBtn;
 
@@ -363,9 +378,42 @@ function injectStyles(): void {
       background: var(--primary-color, rgba(94, 106, 210, 0.6));
     }
 
-    /* 小窗口态不缩放宽度，隐藏手柄 */
+    /* 小窗口态不缩放宽度，隐藏左缘手柄 */
     #${SIDEBAR_ID}.mini .${CLASS_NAMES.RESIZE_HANDLE} {
       display: none;
+    }
+
+    /* 小窗口态：标题栏拖动移位 */
+    #${SIDEBAR_ID}.mini .${CLASS_NAMES.SIDEBAR} {
+      cursor: move;
+    }
+
+    /* 右下角缩放角（仅小窗口态显示） */
+    .${CLASS_NAMES.MINI_CORNER} {
+      display: none;
+    }
+
+    #${SIDEBAR_ID}.mini .${CLASS_NAMES.MINI_CORNER} {
+      display: block;
+      position: absolute;
+      right: 0;
+      bottom: 0;
+      width: 18px;
+      height: 18px;
+      cursor: nwse-resize;
+      z-index: 3;
+    }
+
+    .${CLASS_NAMES.MINI_CORNER}::after {
+      content: '';
+      position: absolute;
+      right: 3px;
+      bottom: 3px;
+      width: 8px;
+      height: 8px;
+      border-right: 2px solid rgba(0, 0, 0, 0.28);
+      border-bottom: 2px solid rgba(0, 0, 0, 0.28);
+      border-bottom-right-radius: 3px;
     }
   `;
 
@@ -395,7 +443,13 @@ function handleMiniClick(): void {
   if (miniBtnElement) {
     miniBtnElement.title = miniMode ? '还原侧栏' : '小窗口';
   }
-  applyDockedWidth(); // 停靠态恢复拖拽宽度；小窗口态清内联宽度交给 CSS
+  if (miniMode) {
+    ensureMiniRect();
+    applyMiniRect(); // 浮窗位置/尺寸
+  } else {
+    clearMiniInline(); // 回到停靠：清浮窗内联定位
+    applyDockedWidth();
+  }
   Logger.debug(`[Sidebar] 小窗口模式：${miniMode ? '开' : '关'}`);
 }
 
@@ -405,6 +459,7 @@ function handleMiniClick(): void {
 function addCloseListener(): void {
   closeBtnElement?.addEventListener('click', handleCloseClick);
   miniBtnElement?.addEventListener('click', handleMiniClick);
+  headerElement?.addEventListener('mousedown', onMiniHeaderDown);
 
   Logger.debug('[Sidebar] 标题栏按钮事件监听已添加');
 }
@@ -415,6 +470,7 @@ function addCloseListener(): void {
 function removeCloseListener(): void {
   closeBtnElement?.removeEventListener('click', handleCloseClick);
   miniBtnElement?.removeEventListener('click', handleMiniClick);
+  headerElement?.removeEventListener('mousedown', onMiniHeaderDown);
 
   Logger.debug('[Sidebar] 标题栏按钮事件监听已移除');
 }
@@ -485,6 +541,114 @@ function createResizeHandle(): HTMLDivElement {
 }
 
 // ============================================================================
+// 小窗口：拖动移位 + 右下角缩放
+// ============================================================================
+
+const MINI_MIN_W = 300;
+const MINI_MIN_H = 240;
+
+function setIframeInteractive(on: boolean): void {
+  const iframe = sidebarElement?.querySelector('iframe') as HTMLElement | null;
+  if (iframe) iframe.style.pointerEvents = on ? '' : 'none';
+}
+
+/** 首次进入小窗口：从右上角默认位置初始化矩形。 */
+function ensureMiniRect(): void {
+  if (miniRect) return;
+  const width = Math.min(400, window.innerWidth * 0.92);
+  const height = Math.min(640, window.innerHeight - 24);
+  miniRect = { left: Math.max(12, window.innerWidth - width - 12), top: 12, width, height };
+}
+
+/** 把 miniRect 应用为内联定位（覆盖 .mini 的 CSS 默认右上角）。 */
+function applyMiniRect(): void {
+  if (!sidebarElement || !miniMode || !miniRect) return;
+  const s = sidebarElement.style;
+  s.left = `${miniRect.left}px`;
+  s.top = `${miniRect.top}px`;
+  s.right = 'auto';
+  s.width = `${miniRect.width}px`;
+  s.height = `${miniRect.height}px`;
+}
+
+/** 退出小窗口：清掉浮窗内联定位，回到停靠 CSS + 拖拽宽度。 */
+function clearMiniInline(): void {
+  if (!sidebarElement) return;
+  const s = sidebarElement.style;
+  s.left = '';
+  s.top = '';
+  s.right = '';
+  s.height = '';
+}
+
+function onMiniDragMove(e: MouseEvent): void {
+  if (!miniDrag || !miniRect) return;
+  const dx = e.clientX - miniDrag.sx;
+  const dy = e.clientY - miniDrag.sy;
+  if (miniDrag.mode === 'move') {
+    const maxL = window.innerWidth - miniRect.width;
+    const maxT = window.innerHeight - 44; // 至少露出标题栏
+    miniRect.left = Math.max(0, Math.min(maxL, miniDrag.rect.left + dx));
+    miniRect.top = Math.max(0, Math.min(maxT, miniDrag.rect.top + dy));
+  } else {
+    const maxW = window.innerWidth - miniRect.left;
+    const maxH = window.innerHeight - miniRect.top;
+    miniRect.width = Math.max(MINI_MIN_W, Math.min(maxW, miniDrag.rect.width + dx));
+    miniRect.height = Math.max(MINI_MIN_H, Math.min(maxH, miniDrag.rect.height + dy));
+  }
+  applyMiniRect();
+}
+
+function onMiniDragUp(): void {
+  if (!miniDrag) return;
+  miniDrag = null;
+  document.removeEventListener('mousemove', onMiniDragMove);
+  document.removeEventListener('mouseup', onMiniDragUp);
+  setIframeInteractive(true);
+  document.body.style.userSelect = '';
+  if (miniRect) {
+    try {
+      chrome.storage.local.set({ miniRect });
+    } catch {
+      // 忽略
+    }
+  }
+}
+
+function beginMiniDrag(mode: 'move' | 'resize', e: MouseEvent): void {
+  if (!miniMode) return;
+  ensureMiniRect();
+  if (!miniRect) return;
+  e.preventDefault();
+  miniDrag = { mode, sx: e.clientX, sy: e.clientY, rect: { ...miniRect } };
+  setIframeInteractive(false);
+  document.body.style.userSelect = 'none';
+  document.addEventListener('mousemove', onMiniDragMove);
+  document.addEventListener('mouseup', onMiniDragUp);
+}
+
+/** 标题栏按下 → 移动浮窗（避开标题栏上的按钮）。 */
+function onMiniHeaderDown(e: MouseEvent): void {
+  if (!miniMode) return;
+  if ((e.target as HTMLElement).closest('button')) return;
+  beginMiniDrag('move', e);
+}
+
+/** 右下角按下 → 缩放浮窗。 */
+function onMiniCornerDown(e: MouseEvent): void {
+  beginMiniDrag('resize', e);
+}
+
+function createMiniCorner(): HTMLDivElement {
+  const corner = document.createElement('div');
+  corner.className = CLASS_NAMES.MINI_CORNER;
+  corner.title = '拖拽缩放';
+  corner.addEventListener('mousedown', onMiniCornerDown);
+  miniCornerElement = corner;
+  return corner;
+}
+
+// ============================================================================
 // 操作函数
 // ============================================================================
 
@@ -512,8 +676,9 @@ export function createSidebar(): HTMLDivElement {
   const content = createContent();
   sidebarElement.appendChild(content);
 
-  // 左缘缩放手柄
+  // 左缘缩放手柄 + 小窗口右下角缩放角
   sidebarElement.appendChild(createResizeHandle());
+  sidebarElement.appendChild(createMiniCorner());
 
   // // 添加样式
   injectStyles();
@@ -529,14 +694,22 @@ export function createSidebar(): HTMLDivElement {
     sidebarElement.classList.add('mini');
   }
 
-  // 恢复持久化的停靠宽度
+  // 恢复持久化的停靠宽度 + 小窗口位置/尺寸
   try {
-    chrome.storage.local.get('sidebarWidth', (r) => {
+    chrome.storage.local.get(['sidebarWidth', 'miniRect'], (r) => {
       const w = r?.sidebarWidth;
       if (typeof w === 'number' && w >= 320) {
         dockedWidth = w;
       }
+      const mr = r?.miniRect;
+      if (mr && typeof mr.left === 'number' && typeof mr.width === 'number') {
+        miniRect = mr as MiniRect;
+      }
       applyDockedWidth();
+      if (miniMode) {
+        ensureMiniRect();
+        applyMiniRect();
+      }
     });
   } catch {
     applyDockedWidth();
@@ -615,13 +788,18 @@ export function cleanupSidebar(): void {
   // 清理可能残留的拖拽监听
   document.removeEventListener('mousemove', onResizeMove);
   document.removeEventListener('mouseup', onResizeUp);
+  document.removeEventListener('mousemove', onMiniDragMove);
+  document.removeEventListener('mouseup', onMiniDragUp);
   isResizing = false;
+  miniDrag = null;
 
   // 重置引用
   sidebarElement = null;
   closeBtnElement = null;
   miniBtnElement = null;
   resizeHandleElement = null;
+  headerElement = null;
+  miniCornerElement = null;
 }
 
 /**
