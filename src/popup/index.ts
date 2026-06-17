@@ -809,6 +809,10 @@ async function handleTranslateCurrentPageClick(): Promise<void> {
       translationStatus.message,
       translationStatus.kind
     );
+    // 内容脚本已存「翻译」记录 → 刷新片段列表，让记录页即时可见
+    if (translatedCount > 0) {
+      enqueueRefresh('refreshSnippets');
+    }
   } catch (error) {
     setTranslationStatus('immersive-status', getErrorMessage(error) || '翻译失败', 'error');
   }

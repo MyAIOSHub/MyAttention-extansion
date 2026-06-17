@@ -909,6 +909,45 @@ async function saveTextRecord(
   }
 }
 
+/** 页面翻译完成后存一条「翻译」记录（按页 URL 去重，含原/译样本）。 */
+async function savePageTranslationRecord(
+  pairs: { src: string; tr: string }[]
+): Promise<void> {
+  const clean = pairs.filter((p) => p.src.trim() && p.tr.trim());
+  if (!clean.length) {
+    return;
+  }
+  const SAMPLE = 12;
+  const sample = clean
+    .slice(0, SAMPLE)
+    .map((p) => `${p.src.trim()}\n→ ${p.tr.trim()}`)
+    .join('\n\n');
+  const body = clean.length > SAMPLE ? `${sample}\n\n…（共 ${clean.length} 段）` : sample;
+  const title = `翻译 · ${(document.title || location.hostname).slice(0, 40)}`.slice(0, 120);
+  try {
+    await chromeMessageAdapter.sendMessage({
+      type: 'upsertSnippet',
+      snippet: {
+        dedupeKey: `translation:page:${location.href}`,
+        type: 'page_save',
+        captureMethod: 'context_menu_page',
+        selectionText: title,
+        contextText: body,
+        selectors: [],
+        url: location.href,
+        title,
+        domain: location.hostname || '翻译',
+        sourceKind: 'web_page',
+        headingPath: ['翻译'],
+        rawContextMarkdown: body,
+        summaryText: clean[0].tr.slice(0, 200),
+      },
+    });
+  } catch {
+    // 存记录失败不影响页面翻译
+  }
+}
+
 async function translateSelectedText(text: string): Promise<string> {
   const settings = getImmersiveTranslationSettings();
   const response = await chromeMessageAdapter.sendMessage({
@@ -1017,6 +1056,10 @@ function initPageTranslationListener(): void {
             return;
           }
 
+          // 原文按 id 索引，便于和译文配对存记录
+          const origById = new Map(request.items.map((it) => [it.id, it.text]));
+          const collectedPairs: { src: string; tr: string }[] = [];
+
           // 分批并发翻译：每批返回即渲染，译文逐段出现而非整页一次性等待。
           const { translatedCount, firstError } = await runBatchedTranslation({
             items: request.items,
@@ -1034,6 +1077,10 @@ function initPageTranslationListener(): void {
             },
             onBatch: (translations) => {
               renderPageTranslations({ mode, translations });
+              translations.forEach((t) => {
+                const src = origById.get(t.id);
+                if (src && t.text) collectedPairs.push({ src, tr: t.text });
+              });
             },
           });
 
@@ -1041,6 +1088,9 @@ function initPageTranslationListener(): void {
             sendResponse({ status: 'error', error: firstError });
             return;
           }
+
+          // 页面翻译完成 → 存一条「翻译」记录
+          void savePageTranslationRecord(collectedPairs);
 
           sendResponse({
             status: 'ok',
