@@ -50,8 +50,8 @@ function clampVolume(value: number | undefined, fallback: number): number {
 }
 
 export const DEFAULT_BASE_PLAYBACK_RATE = 1;
-const MIN_PLAYBACK_RATE = 1;
-const HARD_MAX_PLAYBACK_RATE = 2;
+const MIN_PLAYBACK_RATE = 0.5;
+const HARD_MAX_PLAYBACK_RATE = 3;
 const PLAYBACK_RATE_STEP_PER_BACKLOG = 0.12;
 
 function clampBasePlaybackRate(value: number | undefined): number {
@@ -62,13 +62,13 @@ function clampBasePlaybackRate(value: number | undefined): number {
 }
 
 /**
- * 译音播放倍速 = max(用户基础倍速, 1 + 0.12×排队积压)，硬封顶 2.0x（保音高）。
- * - 基础倍速即时生效：无积压也按用户设定的倍速播放。
- * - 积压越大在基础之上继续加速以追回滞后。
+ * 译音播放倍速 = clamp(用户基础倍速 + 0.12×排队积压, 0.5, 3)。
+ * - 基础倍速「即时生效」且可低于 1.0（放慢）：基础值始终叠加，不会被积压加速掩盖。
+ * - 积压在基础之上继续加速以追回滞后，硬封顶 3.0x（保音高）。
  */
 function computeAdaptivePlaybackRate(pendingSegments: number, baseRate: number): number {
-  const adaptive = pendingSegments > 0 ? 1 + PLAYBACK_RATE_STEP_PER_BACKLOG * pendingSegments : 1;
-  return Math.min(HARD_MAX_PLAYBACK_RATE, Math.max(baseRate, adaptive));
+  const backlogBoost = pendingSegments > 0 ? PLAYBACK_RATE_STEP_PER_BACKLOG * pendingSegments : 0;
+  return Math.min(HARD_MAX_PLAYBACK_RATE, Math.max(MIN_PLAYBACK_RATE, baseRate + backlogBoost));
 }
 
 function setAudioPlaybackRate(audio: HTMLAudioElement, playbackRate: number): void {

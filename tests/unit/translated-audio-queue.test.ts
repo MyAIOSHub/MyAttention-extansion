@@ -187,12 +187,27 @@ describe('TranslatedAudioPlaybackQueue', () => {
     expect(audios[0].playbackRate).toBeCloseTo(1.4, 5);
   });
 
-  it('lets backlog push above the base rate but hard-caps at 2.0x', () => {
+  it('honors a base rate below 1.0 (slow playback) with no backlog', () => {
+    const { audios, queue } = makeQueue();
+    queue.setBasePlaybackRate(0.5);
+
+    queue.enqueue({
+      segmentId: 1,
+      chunks: [new Uint8Array([1])],
+      getVolume: () => 1,
+      delayMs: 0,
+    });
+
+    // 0.5x 不被积压加速掩盖（无积压）→ 即时放慢
+    expect(audios[0].playbackRate).toBeCloseTo(0.5, 5);
+  });
+
+  it('adds backlog boost on top of the base rate, hard-capped at 3.0x', () => {
     const { audios, queue } = makeQueue();
     queue.setBasePlaybackRate(1);
 
-    // 12 段：11 段排队 → 1 + 0.12*11 = 2.32，硬封顶到 2.0
-    for (let id = 1; id <= 12; id += 1) {
+    // 21 段：20 段排队 → 1 + 0.12*20 = 3.4，硬封顶到 3.0
+    for (let id = 1; id <= 21; id += 1) {
       queue.enqueue({
         segmentId: id,
         chunks: [new Uint8Array([id])],
@@ -201,6 +216,6 @@ describe('TranslatedAudioPlaybackQueue', () => {
       });
     }
 
-    expect(audios[0].playbackRate).toBeCloseTo(2, 5);
+    expect(audios[0].playbackRate).toBeCloseTo(3, 5);
   });
 });
