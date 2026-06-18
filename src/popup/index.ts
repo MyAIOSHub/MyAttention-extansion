@@ -1807,14 +1807,17 @@ async function handleTranscribeStartClick(): Promise<void> {
     clearTranscribePlayback();
     transcribeRecordKey = `${Date.now()}`;
     transcribeRecordTitle = activeTab.title || '转写';
+    // 火山 AST 必须给「有效」的 targetLanguage（'auto' 无效→不出字幕）。转写只取源字幕，
+    // 故 target 给个有效值即可：auto→zh-CN(走 zhen 中英识别)，指定语种→与源相同(直通)。
+    const transcribeLang = getControlValue('transcribe-source-language', 'auto');
     const response = await safeSendRuntimeMessage<unknown, { simulcast?: { state?: string } }>({
       type: 'simulcast:start',
       tabId: activeTab.id,
       streamId,
       audioSource: transcribeSource,
       recordAudio: true, // 标签页/麦克风：录制以便回放
-      sourceLanguage: getControlValue('transcribe-source-language', 'auto'),
-      targetLanguage: 'auto',
+      sourceLanguage: transcribeLang,
+      targetLanguage: transcribeLang === 'auto' ? 'zh-CN' : transcribeLang,
       model: getControlValue(
         'simulcast-model',
         si?.model ?? DEFAULT_SETTINGS.simultaneousInterpretation?.model ?? ''
