@@ -888,7 +888,13 @@ function handleSimulcastUpdate(
   }
 
   if (message?.audio?.base64) {
-    setupTranscribePlayback(message.audio.base64, message.audio.mime || 'audio/webm');
+    const mime = message.audio.mime || 'audio/webm';
+    setupTranscribePlayback(message.audio.base64, mime);
+    // 实时转写停止后：把录音交火山妙记(后端 auc 大模型)重转，得到带说话人分离的版本
+    if (transcribePendingDiarize) {
+      transcribePendingDiarize = false;
+      void diarizeRecordingWithMiaoji(message.audio.base64, mime);
+    }
     sendResponse({ status: 'ok' });
     return;
   }
@@ -1603,6 +1609,8 @@ const TRANSCRIBE_MODE_KEY = 'transcribeMode';
 let saysoAbort: AbortController | null = null;
 // 拖入/选中的待转写文件（文件来源）
 let selectedTranscribeFile: File | null = null;
+// 实时转写停止后是否用火山妙记重转以分离说话人
+let transcribePendingDiarize = false;
 // 当前转写会话的记录标题与去重键（自动保存 + 手动保存复用同一条记录）
 let transcribeRecordTitle = '';
 let transcribeRecordKey = '';
@@ -1807,6 +1815,7 @@ async function handleTranscribeStartClick(): Promise<void> {
     clearTranscribePlayback();
     transcribeRecordKey = `${Date.now()}`;
     transcribeRecordTitle = activeTab.title || '转写';
+    transcribePendingDiarize = true; // 停止后用火山妙记重转分离说话人
     // 火山 AST 必须给「有效」的 targetLanguage（'auto' 无效→不出字幕）。转写只取源字幕，
     // 故 target 给个有效值即可：auto→zh-CN(走 zhen 中英识别)，指定语种→与源相同(直通)。
     const transcribeLang = getControlValue('transcribe-source-language', 'auto');
@@ -1935,6 +1944,31 @@ function setupTranscribeFilePlayback(file: File): void {
     document.getElementById('transcribe-playback')?.classList.remove('hidden');
   } catch {
     // 无法播放的文件忽略（不影响转写）
+  }
+}
+
+/**
+ * 实时转写停止后，把录音交火山妙记(后端 火山 auc 大模型，已开 enable_speaker_info)重转，
+ * 用带说话人分离(0/1/2/3)的结果替换实时预览。失败则保留实时转写。
+ */
+async function diarizeRecordingWithMiaoji(base64: string, mime: string): Promise<void> {
+  try {
+    setTranscribeStatus('正在用火山妙记分离说话人…', 'info');
+    const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+    const ext = mime.includes('webm') ? 'webm' : mime.includes('ogg') ? 'ogg' : 'wav';
+    const file = new File([new Blob([bytes], { type: mime })], `recording.${ext}`, { type: mime });
+    const lang = getControlValue('transcribe-source-language', 'auto');
+    // falcon = 高精度·火山(auc 大模型)，已默认开启说话人分离
+    const result = await transcribeViaSayso(file, 'falcon', lang);
+    if (result.segments.length) {
+      loadTranscript(result.segments, result.speakers);
+      setTranscribeStatus(`已用火山妙记重转（${result.speakers.length} 位说话人）`, 'success');
+      void saveTranscriptRecord(true);
+    } else {
+      setTranscribeStatus('火山妙记未返回内容，保留实时转写', 'info');
+    }
+  } catch (error) {
+    setTranscribeStatus(`说话人分离失败：${getErrorMessage(error)}（保留实时转写）`, 'error');
   }
 }
 
