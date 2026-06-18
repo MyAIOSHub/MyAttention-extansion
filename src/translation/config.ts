@@ -117,7 +117,7 @@ export function createDefaultSimultaneousInterpretationConfig(): SimultaneousInt
     originalVolume: 0.25,
     translatedVolume: 1,
     translatedAudioDelayMs: 0,
-    translatedMaxPlaybackRate: 1.5,
+    translatedMaxPlaybackRate: 1,
     subtitleDisplayMode: 'bilingual',
     voiceCloneEnabled: true,
     credentials: {

@@ -255,7 +255,7 @@ function updateActivePlaybackSettings(
     activeOriginalGain.gain.value = getOriginalPlaybackVolume(session);
   }
   translatedAudioQueue.updateActiveVolume(getTranslatedPlaybackVolume(session));
-  translatedAudioQueue.setMaxPlaybackRate(session.translatedMaxPlaybackRate);
+  translatedAudioQueue.setBasePlaybackRate(session.translatedMaxPlaybackRate);
 
   return { status: 'ok', updated: true };
 }
@@ -488,7 +488,7 @@ async function startCapture(message: SimulcastOffscreenStartMessage): Promise<{
   activeAstSession = astSession;
   activeSession = session;
   activeMediaEl = mediaEl ?? null;
-  translatedAudioQueue.setMaxPlaybackRate(session.translatedMaxPlaybackRate);
+  translatedAudioQueue.setBasePlaybackRate(session.translatedMaxPlaybackRate);
 
   return {
     status: 'ok',

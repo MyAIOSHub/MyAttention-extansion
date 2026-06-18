@@ -158,12 +158,41 @@ describe('TranslatedAudioPlaybackQueue', () => {
     expect(audios[2].playbackRate).toBe(1);
   });
 
-  it('caps the adaptive rate at the configured maximum and applies it live', async () => {
+  it('applies the base playback rate immediately even with no backlog', () => {
     const { audios, queue } = makeQueue();
-    queue.setMaxPlaybackRate(1.3);
+    queue.setBasePlaybackRate(1.5);
 
-    // 排 6 段，第一段在播、后 5 段排队 → 1 + 0.12*5 = 1.6，被封顶到 1.3
-    for (let id = 1; id <= 6; id += 1) {
+    queue.enqueue({
+      segmentId: 1,
+      chunks: [new Uint8Array([1])],
+      getVolume: () => 1,
+      delayMs: 0,
+    });
+
+    // 无积压也按用户设定的基础倍速播放（即时生效）
+    expect(audios[0].playbackRate).toBeCloseTo(1.5, 5);
+  });
+
+  it('updates the currently playing clip when the base rate changes live', () => {
+    const { audios, queue } = makeQueue();
+    queue.enqueue({
+      segmentId: 1,
+      chunks: [new Uint8Array([1])],
+      getVolume: () => 1,
+      delayMs: 0,
+    });
+    expect(audios[0].playbackRate).toBe(1);
+
+    queue.setBasePlaybackRate(1.4);
+    expect(audios[0].playbackRate).toBeCloseTo(1.4, 5);
+  });
+
+  it('lets backlog push above the base rate but hard-caps at 2.0x', () => {
+    const { audios, queue } = makeQueue();
+    queue.setBasePlaybackRate(1);
+
+    // 12 段：11 段排队 → 1 + 0.12*11 = 2.32，硬封顶到 2.0
+    for (let id = 1; id <= 12; id += 1) {
       queue.enqueue({
         segmentId: id,
         chunks: [new Uint8Array([id])],
@@ -172,6 +201,6 @@ describe('TranslatedAudioPlaybackQueue', () => {
       });
     }
 
-    expect(audios[0].playbackRate).toBeCloseTo(1.3, 5);
+    expect(audios[0].playbackRate).toBeCloseTo(2, 5);
   });
 });
