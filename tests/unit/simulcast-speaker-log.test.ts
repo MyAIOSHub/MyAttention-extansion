@@ -4,6 +4,7 @@ import {
   reduceSimulcastSpeakerSegments,
   formatSimulcastTimestamp,
   pickActiveSegmentIndex,
+  computeVisibleWindowStart,
   type SimulcastSpeakerSegment,
 } from '@/popup/simulcast-speaker-log';
 
@@ -166,6 +167,26 @@ describe('simulcast speaker log', () => {
 
     it('skips segments without a video time but keeps their position', () => {
       expect(pickActiveSegmentIndex(at(10, undefined, 30), 15)).toBe(0);
+    });
+  });
+
+  describe('computeVisibleWindowStart', () => {
+    it('shows everything when total fits the window', () => {
+      expect(computeVisibleWindowStart(10, -1, 40)).toBe(0);
+    });
+
+    it('shows the tail window when nothing is active (live edge)', () => {
+      expect(computeVisibleWindowStart(100, -1, 40)).toBe(60);
+      expect(computeVisibleWindowStart(100, 95, 40)).toBe(60);
+    });
+
+    it('shifts the window back to include a far-rewound active segment', () => {
+      // active=50 is before the default tail window [60,100) → recenter on it
+      expect(computeVisibleWindowStart(100, 50, 40)).toBe(30);
+    });
+
+    it('clamps the shifted window at zero', () => {
+      expect(computeVisibleWindowStart(100, 5, 40)).toBe(0);
     });
   });
 });

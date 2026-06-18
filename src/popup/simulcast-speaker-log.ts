@@ -88,6 +88,22 @@ export function pickActiveSegmentIndex(
   return active;
 }
 
+/**
+ * 选取面板可见窗口起点：默认显示末尾 windowSize 条（直播）；
+ * 当高亮段（回退/拖动定位的当前句）落在默认窗口之前时，把窗口前移以包含它。
+ */
+export function computeVisibleWindowStart(
+  total: number,
+  activeIndex: number,
+  windowSize: number
+): number {
+  let start = Math.max(0, total - windowSize);
+  if (activeIndex >= 0 && activeIndex < start) {
+    start = Math.max(0, activeIndex - Math.floor(windowSize / 2));
+  }
+  return start;
+}
+
 export function reduceSimulcastSpeakerSegments(
   segments: SimulcastSpeakerSegment[],
   update: SimulcastSpeakerUpdate

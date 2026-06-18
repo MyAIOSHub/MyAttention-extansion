@@ -150,6 +150,7 @@ import {
 } from './local-credential-prefill';
 import { formatPageTranslationStatus } from './translation-status';
 import {
+  computeVisibleWindowStart,
   formatSimulcastTimestamp,
   pickActiveSegmentIndex,
   reduceSimulcastSpeakerSegments,
@@ -639,9 +640,12 @@ function renderSimulcastPaired(): void {
     translation: translations[i]?.text ?? '',
   }));
 
-  const visible = turns.slice(-40);
+  const WINDOW = 40;
   const activeId = simulcastActiveSourceId;
-  const activeIndex = activeId ? visible.findIndex((t) => t.id === activeId) : -1;
+  const activeFull = activeId ? turns.findIndex((t) => t.id === activeId) : -1;
+  const windowStart = computeVisibleWindowStart(turns.length, activeFull, WINDOW);
+  const visible = turns.slice(windowStart, windowStart + WINDOW);
+  const activeIndex = activeFull >= 0 ? activeFull - windowStart : -1;
 
   el.innerHTML = visible
     .map((t, i) => {
@@ -1164,7 +1168,9 @@ function sendSubtitleToVideo(clear = false): void {
  * 仅在有视频时钟时生效；无视频（麦克风等）走「一到就显示」回退。
  */
 function syncSubtitleToPlayhead(): void {
-  if (!simulcastRunning || transcribeActive) return;
+  // 不要求 simulcastRunning：停掉同传后仍可拖动视频让面板/字幕跟随当前帧。
+  if (transcribeActive) return;
+  if (!simulcastSpeakerSegments.length) return;
   const currentTime = simulcastLatestVideoClock?.currentTime;
   if (typeof currentTime !== 'number' || !Number.isFinite(currentTime)) return;
 

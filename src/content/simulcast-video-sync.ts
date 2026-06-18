@@ -38,6 +38,8 @@ interface SyncState {
 
 let state: SyncState | null = null;
 let videoLifecycleNotifierInitialized = false;
+let scrubReporterInitialized = false;
+let lastScrubSentAt = 0;
 let lastVideoStoppedSentAt = 0;
 let suppressVideoStoppedUntil = 0;
 let videoClockState: {
@@ -521,10 +523,44 @@ function initVideoLifecycleNotifier(): void {
   window.addEventListener('beforeunload', () => sendVideoStopped('pagehide'));
 }
 
+/**
+ * 上报视频拖动位置（seeked）：独立于同传会话生命周期，停掉同传/暂停后仍上报，
+ * 让 popup 的转写面板/字幕随拖动跟随当前帧（rVFC 仅在播放时触发，无法覆盖暂停拖动）。
+ */
+function initVideoScrubReporter(): void {
+  if (scrubReporterInitialized) return;
+  scrubReporterInitialized = true;
+  document.addEventListener(
+    'seeked',
+    (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLVideoElement) || !isRelevantVideo(target)) return;
+      const now = Date.now();
+      if (now - lastScrubSentAt < 150) return;
+      lastScrubSentAt = now;
+      try {
+        chrome.runtime.sendMessage({
+          type: 'simulcast:videoClock',
+          url: window.location.href,
+          mediaTime: target.currentTime,
+          currentTime: target.currentTime,
+          playbackRate: target.playbackRate,
+          paused: target.paused,
+          ended: target.ended,
+        });
+      } catch {
+        // popup/background 未打开或上下文失效：忽略
+      }
+    },
+    true
+  );
+}
+
 /** 注册 simulcast:syncVideo / queryVideoPlaying 监听 + 播放通知（仅顶层页面调用）。 */
 export function initSimulcastVideoSyncListener(): void {
   initVideoPlayingNotifier();
   initVideoLifecycleNotifier();
+  initVideoScrubReporter();
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message?.type === 'simulcast:queryVideoPlaying') {
       sendResponse({ status: 'ok', playing: isMainVideoPlaying() });
