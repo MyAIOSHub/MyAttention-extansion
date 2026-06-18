@@ -158,6 +158,11 @@ import {
   type SimulcastSubtitleChannel,
 } from './simulcast-speaker-log';
 import {
+  upsertTranscriptNode,
+  deriveVideoId,
+  type TranscriptNode,
+} from './simulcast-transcript';
+import {
   createSimulcastDynamicSyncState,
   observeSourceSubtitleAnchor,
   observeTranslatedAudioPlayback,
@@ -218,6 +223,120 @@ let refreshQueue: PopupRefreshQueue | null = null;
 let popupContextInvalidated = false;
 let attentionLoadingCount = 0;
 let simulcastSpeakerSegments: SimulcastSpeakerSegment[] = [];
+
+// 按视频持久化的同传转写（跨暂停/拖拽/重启累积，按视频时间排序去重）
+let videoTranscript: TranscriptNode[] = [];
+let currentVideoId = '';
+let simulcastPassId = 0;
+let transcriptSaveTimer: number | null = null;
+const TRANSCRIPT_KEY_PREFIX = 'saysoSimulcastTranscript:';
+const TRANSCRIPT_INDEX_KEY = 'saysoSimulcastTranscriptIndex';
+const TRANSCRIPT_DEDUP_WINDOW_SEC = 1;
+const MAX_NODES_PER_VIDEO = 4000;
+const MAX_STORED_VIDEOS = 50;
+
+async function loadVideoTranscript(videoId: string): Promise<TranscriptNode[]> {
+  if (!videoId) return [];
+  try {
+    const key = TRANSCRIPT_KEY_PREFIX + videoId;
+    const got = await chrome.storage.local.get(key);
+    const arr = got?.[key];
+    return Array.isArray(arr) ? (arr as TranscriptNode[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+async function persistVideoTranscript(): Promise<void> {
+  if (!currentVideoId) return;
+  try {
+    const key = TRANSCRIPT_KEY_PREFIX + currentVideoId;
+    await chrome.storage.local.set({ [key]: videoTranscript.slice(-MAX_NODES_PER_VIDEO) });
+    // LRU：维护视频索引，超额淘汰最旧视频的转写
+    const got = await chrome.storage.local.get(TRANSCRIPT_INDEX_KEY);
+    let index: string[] = Array.isArray(got?.[TRANSCRIPT_INDEX_KEY])
+      ? (got[TRANSCRIPT_INDEX_KEY] as string[])
+      : [];
+    index = index.filter((id) => id !== currentVideoId);
+    index.push(currentVideoId);
+    const evict = index.length > MAX_STORED_VIDEOS ? index.splice(0, index.length - MAX_STORED_VIDEOS) : [];
+    await chrome.storage.local.set({ [TRANSCRIPT_INDEX_KEY]: index });
+    if (evict.length) {
+      await chrome.storage.local.remove(evict.map((id) => TRANSCRIPT_KEY_PREFIX + id));
+    }
+  } catch {
+    // 存储失败不影响同传
+  }
+}
+
+function saveVideoTranscriptDebounced(): void {
+  if (!currentVideoId) return;
+  if (transcriptSaveTimer !== null) {
+    window.clearTimeout(transcriptSaveTimer);
+  }
+  transcriptSaveTimer = window.setTimeout(() => {
+    transcriptSaveTimer = null;
+    void persistVideoTranscript();
+  }, 800);
+}
+
+/** popup 打开时按当前页视频加载已累积的转写并渲染。 */
+async function loadCurrentVideoTranscriptOnOpen(): Promise<void> {
+  try {
+    const tab = await getActiveTab();
+    const videoId = deriveVideoId(tab?.url);
+    if (!videoId) return;
+    currentVideoId = videoId;
+    videoTranscript = await loadVideoTranscript(videoId);
+    renderSimulcastPaired();
+  } catch {
+    // 忽略加载失败
+  }
+}
+
+/** 开启新一轮捕获：递增 passId，并切到当前视频的持久化转写。 */
+async function beginSimulcastPass(url: string | undefined): Promise<void> {
+  simulcastPassId += 1;
+  await switchVideoTranscript(deriveVideoId(url));
+}
+
+/** 切到某视频的转写：保存旧的、加载新的。videoId 不变则不动。 */
+async function switchVideoTranscript(videoId: string): Promise<void> {
+  if (!videoId || videoId === currentVideoId) return;
+  if (currentVideoId) {
+    await persistVideoTranscript();
+  }
+  currentVideoId = videoId;
+  videoTranscript = await loadVideoTranscript(videoId);
+  renderSimulcastPaired();
+}
+
+/** 把当前 pass 的配对 turn（原文+译文+视频时间）合并进持久化转写。 */
+function commitLiveTurnsToTranscript(): void {
+  if (!currentVideoId) return;
+  const sources = simulcastSpeakerSegments.filter((s) => s.channel === 'source');
+  const translations = simulcastSpeakerSegments.filter((s) => s.channel === 'translation');
+  let changed = false;
+  sources.forEach((src, i) => {
+    if (typeof src.videoTime !== 'number' || !Number.isFinite(src.videoTime)) return;
+    const next = upsertTranscriptNode(
+      videoTranscript,
+      {
+        key: `${simulcastPassId}:${src.id}`,
+        videoTime: src.videoTime,
+        source: src.text,
+        translation: translations[i]?.text ?? '',
+        passId: simulcastPassId,
+      },
+      TRANSCRIPT_DEDUP_WINDOW_SEC
+    );
+    if (next !== videoTranscript) {
+      videoTranscript = next;
+      changed = true;
+    }
+  });
+  if (changed) saveVideoTranscriptDebounced();
+}
 
 const SILENT_MESSAGE_TYPES = new Set(['reportContentRuntime']);
 const popupMessageRouter = createPopupMessageRouter({
@@ -609,17 +728,30 @@ function setTranslationStatus(
  *   译文…
  * 火山实时同传不做真说话人分离（speakerId 恒定/无身份），故不显示「说话人N」标签。
  */
-function renderSimulcastPaired(): void {
-  const el = document.getElementById('simulcast-paired');
-  if (!el) return;
-  const sources = simulcastSpeakerSegments.filter((s) => s.channel === 'source');
-  const translations = simulcastSpeakerSegments.filter((s) => s.channel === 'translation');
-  if (!sources.length && !translations.length) {
-    el.innerHTML = '<div class="text-gray-400 text-xs">等待…</div>';
-    return;
+interface SimulcastTurn {
+  id: string;
+  time: string;
+  source: string;
+  translation: string;
+}
+
+/**
+ * 面板内容：优先用按视频时间持久化的 videoTranscript（跨 pass 累积、时间排序）；
+ * 无视频转写（如麦克风会话）时回退当前 pass 的到达顺序分段。
+ */
+function buildSimulcastTurns(): SimulcastTurn[] {
+  if (videoTranscript.length) {
+    return videoTranscript.map((n) => ({
+      id: n.key,
+      time: formatSimulcastTimestamp(n.videoTime * 1000),
+      source: n.source,
+      translation: n.translation,
+    }));
   }
 
-  // 优先用主视频播放位置做时间戳（与画面对齐）；无视频时钟时回退墙钟相对会话起点。
+  const sources = simulcastSpeakerSegments.filter((s) => s.channel === 'source');
+  const translations = simulcastSpeakerSegments.filter((s) => s.channel === 'translation');
+  // 无视频时钟：回退墙钟相对会话起点。
   const base = simulcastSpeakerSegments.reduce(
     (min, s) => (s.clockWall > 0 && s.clockWall < min ? s.clockWall : min),
     Number.POSITIVE_INFINITY
@@ -632,13 +764,22 @@ function renderSimulcastPaired(): void {
       ? formatSimulcastTimestamp(s.clockWall - base)
       : '--:--';
   };
-
-  const turns = sources.map((src, i) => ({
+  return sources.map((src, i) => ({
     id: src.id,
     time: relTime(src),
     source: src.text,
     translation: translations[i]?.text ?? '',
   }));
+}
+
+function renderSimulcastPaired(): void {
+  const el = document.getElementById('simulcast-paired');
+  if (!el) return;
+  const turns = buildSimulcastTurns();
+  if (!turns.length) {
+    el.innerHTML = '<div class="text-gray-400 text-xs">等待…</div>';
+    return;
+  }
 
   const WINDOW = 40;
   const activeId = simulcastActiveSourceId;
@@ -693,6 +834,7 @@ function appendSimulcastSpeakerLog(
   if (simulcastSpeakerSegments.length > 120) {
     simulcastSpeakerSegments = simulcastSpeakerSegments.slice(-80);
   }
+  commitLiveTurnsToTranscript();
   renderSimulcastPaired();
 }
 
@@ -945,6 +1087,7 @@ async function handleSimulcastStartClick(): Promise<void> {
       throw new Error('未找到当前标签页');
     }
 
+    await beginSimulcastPass(activeTab.url);
     await holdVideoUntilTranslatedAudio();
 
     const response = await safeSendRuntimeMessage<
@@ -966,6 +1109,7 @@ async function handleSimulcastStartClick(): Promise<void> {
       originalVolume: getNumberControlValue('simulcast-original-volume', 0.25),
       translatedVolume: getNumberControlValue('simulcast-translated-volume', 1),
       translatedAudioDelayMs: getDelayControlValue('simulcast-translated-delay-ms'),
+      translatedMaxPlaybackRate: getNumberControlValue('simulcast-max-playback-rate', 1.5),
       subtitleDisplayMode: getControlValue('simulcast-subtitle-mode', 'bilingual'),
       voiceCloneEnabled:
         (document.getElementById('simulcast-voice-clone-toggle') as HTMLInputElement | null)
@@ -1034,6 +1178,7 @@ function resetSimulcastLocalState(options: {
   if (options.saveRecord) {
     void saveSimulcastTranslationRecord(); // 同传 → 翻译记录
   }
+  void persistVideoTranscript(); // 落盘持久化转写
 }
 
 async function handleSimulcastStopClick(): Promise<void> {
@@ -1067,6 +1212,7 @@ async function updateSimulcastPlaybackSettings(): Promise<void> {
     originalVolume: getNumberControlValue('simulcast-original-volume', 0.25),
     translatedVolume: getNumberControlValue('simulcast-translated-volume', 1),
     translatedAudioDelayMs: getDelayControlValue('simulcast-translated-delay-ms'),
+    translatedMaxPlaybackRate: getNumberControlValue('simulcast-max-playback-rate', 1.5),
   });
 
   if (response.status === 'error') {
@@ -1170,16 +1316,15 @@ function sendSubtitleToVideo(clear = false): void {
 function syncSubtitleToPlayhead(): void {
   // 不要求 simulcastRunning：停掉同传后仍可拖动视频让面板/字幕跟随当前帧。
   if (transcribeActive) return;
-  if (!simulcastSpeakerSegments.length) return;
+  if (!videoTranscript.length) return;
   const currentTime = simulcastLatestVideoClock?.currentTime;
   if (typeof currentTime !== 'number' || !Number.isFinite(currentTime)) return;
 
-  const sources = simulcastSpeakerSegments.filter((s) => s.channel === 'source');
-  const translations = simulcastSpeakerSegments.filter((s) => s.channel === 'translation');
-  const idx = pickActiveSegmentIndex(sources, currentTime);
-  const activeId = idx >= 0 ? sources[idx].id : null;
-  const src = idx >= 0 ? sources[idx].text : '';
-  const tr = idx >= 0 ? translations[idx]?.text ?? '' : '';
+  const idx = pickActiveSegmentIndex(videoTranscript, currentTime);
+  const activeNode = idx >= 0 ? videoTranscript[idx] : null;
+  const activeId = activeNode ? activeNode.key : null;
+  const src = activeNode ? activeNode.source : '';
+  const tr = activeNode ? activeNode.translation : '';
 
   const key = `${activeId ?? ''} ${src} ${tr}`;
   if (key === simulcastPlayheadKey) return;
@@ -1834,6 +1979,7 @@ function initializeTranslationActions(): void {
   bindSimulcastPlaybackControl('simulcast-original-volume');
   bindSimulcastPlaybackControl('simulcast-translated-volume');
   bindSimulcastPlaybackControl('simulcast-translated-delay-ms');
+  bindSimulcastPlaybackControl('simulcast-max-playback-rate');
   updateSimulcastControls();
 
   document.getElementById('transcribe-start-btn')?.addEventListener('click', () => {
@@ -3244,6 +3390,7 @@ function initializeSimulcastSettings(): void {
       });
       if (autoSimulcastEnabled) void queryActiveTabAndMaybeAutoStart();
     }
+    void loadCurrentVideoTranscriptOnOpen();
   })();
 }
 
