@@ -1617,7 +1617,7 @@ function renderTranscribeModeCards(): void {
       ? 'border-brand bg-brand-light text-brand'
       : 'border-gray-200 bg-white text-gray-700 hover:border-gray-300 hover:bg-gray-50';
     return (
-      `<button type="button" data-mode="${m.key}" class="transcribe-mode-btn flex flex-col items-center gap-0.5 rounded-lg border-2 ${cls} py-2 px-1 text-center transition-colors">` +
+      `<button type="button" data-mode="${m.key}" class="transcribe-mode-btn flex-shrink-0 min-w-[76px] flex flex-col items-center gap-0.5 rounded-lg border-2 ${cls} py-2 px-2 text-center transition-colors">` +
       `<span class="text-base leading-none">${m.icon}</span>` +
       `<span class="text-xs font-semibold leading-tight">${m.name}</span>` +
       `<span class="text-[10px] leading-tight opacity-70">${m.tier}</span>` +
