@@ -1820,7 +1820,9 @@ async function handleTranscribeStartClick(): Promise<void> {
         si?.model ?? DEFAULT_SETTINGS.simultaneousInterpretation?.model ?? ''
       ),
       audioOutputMode: 'subtitlesOnly', // 强制 s2t：仅源字幕，无翻译/TTS
-      originalVolume: 0,
+      // 标签页捕获会把原音从默认输出截走 → 必须原音原样回放，否则标签页变静音；
+      // 麦克风源回放会造成回声/啸叫，保持静音。
+      originalVolume: transcribeSource === 'tab' ? 1 : 0,
       translatedVolume: 0,
       translatedAudioDelayMs: 0,
       subtitleDisplayMode: 'originalOnly',
