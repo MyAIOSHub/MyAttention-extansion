@@ -45,21 +45,9 @@ export function saysoModeLabel(mode: SaysoMode): string {
   return m ? `${m.icon} ${m.name}` : mode;
 }
 
-/** 调用 Say-So-Scribe 后端转写一个文件，返回分段结果。 */
-export async function transcribeViaSayso(
-  file: File,
-  mode: SaysoMode,
-  language: string,
-  signal?: AbortSignal
-): Promise<SaysoResult> {
+/** 提交 FormData 到 Say-So-Scribe 后端并解析结果（文件/链接共用）。 */
+async function postSaysoTranscribe(form: FormData, signal?: AbortSignal): Promise<SaysoResult> {
   const base = (await getSaysoBackendUrl()).replace(/\/+$/, '');
-  const form = new FormData();
-  form.append('file', file, file.name);
-  form.append('mode', mode);
-  if (language && language !== 'auto') {
-    form.append('language', language);
-  }
-
   let resp: Response;
   try {
     resp = await fetch(`${base}/api/transcribe`, { method: 'POST', body: form, signal });
@@ -84,6 +72,15 @@ export async function transcribeViaSayso(
     } catch {
       // ignore parse error
     }
+    if (/auth_required/i.test(raw)) {
+      throw new Error('该链接需要登录/会员/授权才能访问（私密、付费或受限内容）。请改用本地文件上传，或换公开可访问的链接。');
+    }
+    if (/unsupported_url/i.test(raw)) {
+      throw new Error('无法识别该链接。支持 YouTube/B站/抖音/TikTok/Vimeo/X/Facebook/Dropbox/Google Drive 等公开内容及直链音视频；私密内容请上传文件。');
+    }
+    if (/extract_failed/i.test(raw)) {
+      throw new Error('音频提取失败（平台限制访问/链接无效/无媒体）。请改用本地文件上传，或换一个公开链接。');
+    }
     // 各家「无有效语音/静音」错误 → 友好提示（火山 20000003 / 阿里 NO_VALID_FRAGMENT）
     if (/no valid speech|silence|20000003|NO_VALID_FRAGMENT/i.test(raw)) {
       throw new Error('音频中未检测到有效语音（文件可能是静音或无人声）。请确认该文件能正常播放出声，或换一个有语音的文件。');
@@ -92,4 +89,36 @@ export async function transcribeViaSayso(
   }
 
   return (await resp.json()) as SaysoResult;
+}
+
+/** 调用 Say-So-Scribe 后端转写一个文件，返回分段结果。 */
+export async function transcribeViaSayso(
+  file: File,
+  mode: SaysoMode,
+  language: string,
+  signal?: AbortSignal
+): Promise<SaysoResult> {
+  const form = new FormData();
+  form.append('file', file, file.name);
+  form.append('mode', mode);
+  if (language && language !== 'auto') {
+    form.append('language', language);
+  }
+  return postSaysoTranscribe(form, signal);
+}
+
+/** 平台链接转写：把 URL 交给后端 yt-dlp 提取音频后转写（YouTube/B站/抖音等）。 */
+export async function transcribeViaSaysoUrl(
+  url: string,
+  mode: SaysoMode,
+  language: string,
+  signal?: AbortSignal
+): Promise<SaysoResult> {
+  const form = new FormData();
+  form.append('url', url);
+  form.append('mode', mode);
+  if (language && language !== 'auto') {
+    form.append('language', language);
+  }
+  return postSaysoTranscribe(form, signal);
 }

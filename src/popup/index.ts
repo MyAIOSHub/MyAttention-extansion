@@ -136,6 +136,7 @@ import {
 import {
   SAYSO_MODES,
   transcribeViaSayso,
+  transcribeViaSaysoUrl,
   getSaysoBackendUrl,
   setSaysoBackendUrl,
   saysoModeLabel,
@@ -700,6 +701,39 @@ function requestCurrentTabMediaStreamId(): Promise<string> {
   });
 }
 
+/** 停掉该标签页上仍在运行的捕获（同传/转写共用一个 offscreen 流），释放 tab 媒体流。 */
+async function releaseActiveTabCapture(): Promise<void> {
+  try {
+    await safeSendRuntimeMessage({ type: 'simulcast:stop' });
+  } catch {
+    // 无活跃会话或停止失败：忽略，后续重试取流会报真实错误
+  }
+  if (simulcastRunning) {
+    resetSimulcastLocalState({ clearVideoSync: true, saveRecord: false });
+  }
+  if (transcribeActive) {
+    transcribeActive = false;
+    updateTranscribeControls();
+  }
+}
+
+/**
+ * 取当前标签页媒体流 id。若该 tab 已有活跃捕获（同传/上次转写未释放）→
+ * 先停掉再重试一次，避免「Cannot capture a tab with an active stream」。
+ */
+async function acquireTabMediaStreamId(): Promise<string> {
+  try {
+    return await requestCurrentTabMediaStreamId();
+  } catch (error) {
+    if (/active stream/i.test(getErrorMessage(error))) {
+      await releaseActiveTabCapture();
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      return await requestCurrentTabMediaStreamId();
+    }
+    throw error;
+  }
+}
+
 function setTranslationStatus(
   elementId: string,
   message: string,
@@ -1079,7 +1113,7 @@ async function handleSimulcastStartClick(): Promise<void> {
     };
 
     buildVolcengineAstHeaders(credentials);
-    const streamIdPromise = requestCurrentTabMediaStreamId();
+    const streamIdPromise = acquireTabMediaStreamId();
     setTranslationStatus('simulcast-status', '正在创建当前标签页音频捕获会话...', 'info');
 
     const [streamId, activeTab] = await Promise.all([streamIdPromise, getActiveTab()]);
@@ -1109,7 +1143,7 @@ async function handleSimulcastStartClick(): Promise<void> {
       originalVolume: getNumberControlValue('simulcast-original-volume', 0.25),
       translatedVolume: getNumberControlValue('simulcast-translated-volume', 1),
       translatedAudioDelayMs: getDelayControlValue('simulcast-translated-delay-ms'),
-      translatedMaxPlaybackRate: getNumberControlValue('simulcast-max-playback-rate', 1.5),
+      translatedMaxPlaybackRate: getNumberControlValue('simulcast-max-playback-rate', 1),
       subtitleDisplayMode: getControlValue('simulcast-subtitle-mode', 'bilingual'),
       voiceCloneEnabled:
         (document.getElementById('simulcast-voice-clone-toggle') as HTMLInputElement | null)
@@ -1212,7 +1246,7 @@ async function updateSimulcastPlaybackSettings(): Promise<void> {
     originalVolume: getNumberControlValue('simulcast-original-volume', 0.25),
     translatedVolume: getNumberControlValue('simulcast-translated-volume', 1),
     translatedAudioDelayMs: getDelayControlValue('simulcast-translated-delay-ms'),
-    translatedMaxPlaybackRate: getNumberControlValue('simulcast-max-playback-rate', 1.5),
+    translatedMaxPlaybackRate: getNumberControlValue('simulcast-max-playback-rate', 1),
   });
 
   if (response.status === 'error') {
@@ -1351,7 +1385,7 @@ let autoSimulcastBusy = false;
 
 /** 满足条件则自动开始同传：开关打开、未在运行、凭据齐全。 */
 async function maybeAutoStartSimulcast(): Promise<void> {
-  if (!autoSimulcastEnabled || simulcastRunning || autoSimulcastBusy) return;
+  if (!autoSimulcastEnabled || simulcastRunning || autoSimulcastBusy || transcribeActive) return;
   // 凭据未填则不自动启动（避免反复弹错）
   const hasApiKey = !!getControlValue('simulcast-api-key', '').trim();
   const hasLegacy =
@@ -1567,6 +1601,11 @@ let transcribeSource: 'tab' | 'mic' | 'file' | 'url' = 'tab';
 let transcribeMode: SaysoMode = 'whale';
 const TRANSCRIBE_MODE_KEY = 'transcribeMode';
 let saysoAbort: AbortController | null = null;
+// 拖入/选中的待转写文件（文件来源）
+let selectedTranscribeFile: File | null = null;
+// 当前转写会话的记录标题与去重键（自动保存 + 手动保存复用同一条记录）
+let transcribeRecordTitle = '';
+let transcribeRecordKey = '';
 
 /** 渲染 5 档模式卡 + 选中态。 */
 function renderTranscribeModeCards(): void {
@@ -1601,6 +1640,17 @@ function updateTranscribeModeVisibility(): void {
   wrap?.classList.toggle('hidden', !isMedia);
 }
 
+const DIRECT_MEDIA_EXT = /\.(mp3|mp4|wav|m4a|aac|ogg|oga|opus|webm|flac|mov|mkv|m3u8)(?:\?|#|$)/i;
+
+/** 直链音视频文件 → 前端可直接拉取；否则(平台页/其它)交后端 yt-dlp 提取。 */
+function isDirectMediaUrl(url: string): boolean {
+  try {
+    return DIRECT_MEDIA_EXT.test(new URL(url).pathname);
+  } catch {
+    return false;
+  }
+}
+
 /** 文件/链接转写：走 Say-So-Scribe 后端的所选模式。 */
 async function handleTranscribeViaSayso(): Promise<void> {
   // 运行中再次点击 = 取消
@@ -1610,29 +1660,55 @@ async function handleTranscribeViaSayso(): Promise<void> {
   }
   try {
     let file: File | null = null;
+    let platformUrl = '';
     if (transcribeSource === 'file') {
-      file = (document.getElementById('transcribe-file') as HTMLInputElement | null)?.files?.[0] ?? null;
+      const input = document.getElementById('transcribe-file') as HTMLInputElement | null;
+      file = selectedTranscribeFile ?? input?.files?.[0] ?? null;
       if (!file) throw new Error('请先选择音视频文件');
     } else {
       const url = (document.getElementById('transcribe-url') as HTMLInputElement | null)?.value.trim() || '';
-      if (!url) throw new Error('请先输入直链音视频 URL');
-      setTranscribeStatus('正在拉取链接...', 'info');
-      const blob = await (await fetch(url)).blob();
-      file = new File([blob], url.split('/').pop() || 'audio', { type: blob.type || 'audio/mpeg' });
+      if (!url) throw new Error('请先输入链接（平台视频页或直链音视频）');
+      if (isDirectMediaUrl(url)) {
+        // 直链音视频：前端直接拉取上传
+        setTranscribeStatus('正在拉取链接...', 'info');
+        const resp = await fetch(url);
+        const blob = await resp.blob();
+        const ctype = (resp.headers.get('content-type') || blob.type || '').toLowerCase();
+        if (ctype.includes('text/html')) {
+          // 直链却返回 HTML（防盗链/跳转）→ 退回后端 yt-dlp 尝试
+          platformUrl = url;
+        } else {
+          file = new File([blob], url.split('/').pop() || 'audio', { type: blob.type || 'audio/mpeg' });
+        }
+      } else {
+        // 平台页/其它：交后端 yt-dlp 提取音频
+        platformUrl = url;
+      }
     }
 
     resetTranscript();
+    transcribeRecordKey = `${Date.now()}`;
+    transcribeRecordTitle = file?.name || platformUrl || '转写';
     transcribeActive = true;
     updateTranscribeControls();
-    setTranscribeStatus(`正在用「${saysoModeLabel(transcribeMode)}」转写（Say-So-Scribe）…`, 'info');
+    setTranscribeStatus(
+      platformUrl
+        ? `正在提取并用「${saysoModeLabel(transcribeMode)}」转写平台音频…`
+        : `正在用「${saysoModeLabel(transcribeMode)}」转写（Say-So-Scribe）…`,
+      'info'
+    );
     const meta = document.getElementById('transcribe-meta');
     if (meta) meta.textContent = '转写中…';
 
     saysoAbort = new AbortController();
     const lang = getControlValue('transcribe-source-language', 'auto');
-    const result = await transcribeViaSayso(file, transcribeMode, lang, saysoAbort.signal);
+    const result = platformUrl
+      ? await transcribeViaSaysoUrl(platformUrl, transcribeMode, lang, saysoAbort.signal)
+      : await transcribeViaSayso(file!, transcribeMode, lang, saysoAbort.signal);
     loadTranscript(result.segments, result.speakers);
     setTranscribeStatus(`转写完成（${result.segments.length} 段 · ${saysoModeLabel(transcribeMode)}）`, 'success');
+    void saveTranscriptRecord(true); // 完成即自动存记录
+
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') {
       setTranscribeStatus('已取消转写', 'info');
@@ -1719,7 +1795,7 @@ async function handleTranscribeStartClick(): Promise<void> {
 
     const isTab = transcribeSource === 'tab';
     const [streamId, activeTab] = await Promise.all([
-      isTab ? requestCurrentTabMediaStreamId() : Promise.resolve(''),
+      isTab ? acquireTabMediaStreamId() : Promise.resolve(''),
       getActiveTab(),
     ]);
     if (typeof activeTab?.id !== 'number') {
@@ -1728,6 +1804,8 @@ async function handleTranscribeStartClick(): Promise<void> {
 
     resetTranscript();
     clearTranscribePlayback();
+    transcribeRecordKey = `${Date.now()}`;
+    transcribeRecordTitle = activeTab.title || '转写';
     const response = await safeSendRuntimeMessage<unknown, { simulcast?: { state?: string } }>({
       type: 'simulcast:start',
       tabId: activeTab.id,
@@ -1790,6 +1868,7 @@ async function handleTranscribeStopClick(): Promise<void> {
       throw new Error(response.error || '停止转写失败');
     }
     setTranscribeStatus('已停止转写', 'success');
+    void saveTranscriptRecord(true); // 停止即自动存记录
   } catch (error) {
     setTranscribeStatus(getErrorMessage(error), 'error');
   } finally {
@@ -1889,22 +1968,26 @@ function handleTranscribeExport(format: TranscriptExportFormat): void {
   setTranscribeStatus(`已导出 ${format.toUpperCase()}`, 'success');
 }
 
-async function handleTranscribeSaveClick(): Promise<void> {
+/**
+ * 把当前转写存为「记录」（标题「转写 · …」→ 归「转写」过滤）。
+ * silent=true 用于转写完成后自动保存：无内容静默跳过、不弹错只记日志。
+ */
+async function saveTranscriptRecord(silent = false): Promise<void> {
   const text = getTranscriptText();
   if (!text) {
-    setTranscribeStatus('暂无可保存的转写内容', 'info');
+    if (!silent) setTranscribeStatus('暂无可保存的转写内容', 'info');
     return;
   }
   try {
     const activeTab = await getActiveTab();
     const url = activeTab?.url || '';
-    const pageTitle = activeTab?.title || '转写';
+    const pageTitle = transcribeRecordTitle || activeTab?.title || '转写';
     const domain = url ? new URL(url).hostname : 'transcribe';
     const firstLine = text.split('\n')[0]?.slice(0, 60) ?? '转写';
     const response = await safeSendRuntimeMessage<unknown, { snippet?: { id?: string } }>({
       type: 'upsertSnippet',
       snippet: {
-        dedupeKey: `transcript:${Date.now()}`,
+        dedupeKey: `transcript:${transcribeRecordKey || Date.now()}`,
         type: 'page_save',
         captureMethod: 'context_menu_page',
         selectionText: `转写 · ${pageTitle}`.slice(0, 120),
@@ -1922,10 +2005,14 @@ async function handleTranscribeSaveClick(): Promise<void> {
     if (response.status === 'error') {
       throw new Error(response.error || '保存失败');
     }
-    setTranscribeStatus('已存为记录，可在「记录」查看 / 进「总结」', 'success');
+    if (!silent) setTranscribeStatus('已存为记录，可在「记录」查看 / 进「总结」', 'success');
   } catch (error) {
-    setTranscribeStatus(getErrorMessage(error), 'error');
+    if (!silent) setTranscribeStatus(getErrorMessage(error), 'error');
   }
+}
+
+async function handleTranscribeSaveClick(): Promise<void> {
+  await saveTranscriptRecord(false);
 }
 
 function persistTranslationQuality(quality: 'fast' | 'accurate'): void {
@@ -2011,12 +2098,60 @@ function initializeTranslationActions(): void {
       document.querySelectorAll('.transcribe-source-btn').forEach((b) => {
         b.classList.toggle('active', (b as HTMLElement).dataset.source === source);
       });
-      document.getElementById('transcribe-file')?.classList.toggle('hidden', source !== 'file');
+      document.getElementById('transcribe-file-zone')?.classList.toggle('hidden', source !== 'file');
       document.getElementById('transcribe-url')?.classList.toggle('hidden', source !== 'url');
       updateTranscribeControls();
       updateTranscribeModeVisibility();
     });
   });
+
+  // 文件来源：选择 / 拖放
+  const transcribeFileInput = document.getElementById('transcribe-file') as HTMLInputElement | null;
+  const transcribeDropzone = document.getElementById('transcribe-dropzone');
+  const transcribeFileNameEl = document.getElementById('transcribe-file-name');
+  const showSelectedTranscribeFile = (f: File | null): void => {
+    selectedTranscribeFile = f;
+    if (transcribeFileNameEl) {
+      transcribeFileNameEl.textContent = f ? f.name : '拖入音视频文件，或点击选择';
+    }
+  };
+  transcribeFileInput?.addEventListener('change', () =>
+    showSelectedTranscribeFile(transcribeFileInput.files?.[0] ?? null)
+  );
+  if (transcribeDropzone) {
+    const setDrag = (on: boolean): void => {
+      transcribeDropzone.classList.toggle('border-indigo-400', on);
+      transcribeDropzone.classList.toggle('bg-indigo-50/40', on);
+    };
+    ['dragenter', 'dragover'].forEach((ev) =>
+      transcribeDropzone.addEventListener(ev, (e) => {
+        e.preventDefault();
+        setDrag(true);
+      })
+    );
+    ['dragleave', 'dragend'].forEach((ev) =>
+      transcribeDropzone.addEventListener(ev, () => setDrag(false))
+    );
+    transcribeDropzone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      setDrag(false);
+      const dt = (e as DragEvent).dataTransfer;
+      const f = dt?.files?.[0] ?? null;
+      if (!f) return;
+      if (!/^(audio|video)\//i.test(f.type) && !DIRECT_MEDIA_EXT.test(f.name)) {
+        setTranscribeStatus('请拖入音频或视频文件', 'error');
+        return;
+      }
+      if (transcribeFileInput && dt) {
+        try {
+          transcribeFileInput.files = dt.files; // 同步到原生 input
+        } catch {
+          // 某些环境 input.files 只读，忽略：已存入 selectedTranscribeFile
+        }
+      }
+      showSelectedTranscribeFile(f);
+    });
+  }
   updateTranscribeControls();
 
   // 转写模式（Say-So-Scribe）：渲染卡片 + 载入持久化选择 + 后端地址
