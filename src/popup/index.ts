@@ -1699,6 +1699,7 @@ async function handleTranscribeViaSayso(): Promise<void> {
     );
     const meta = document.getElementById('transcribe-meta');
     if (meta) meta.textContent = '转写中…';
+    if (file) setupTranscribeFilePlayback(file); // 本地文件/直链：底部播放器可即时听
 
     saysoAbort = new AbortController();
     const lang = getControlValue('transcribe-source-language', 'auto');
@@ -1914,6 +1915,21 @@ function setupTranscribePlayback(base64: string, mime: string): void {
     setTranscribeStatus('转写完成，可回放音频并点分段跳转', 'success');
   } catch {
     // 忽略无法解码的录音
+  }
+}
+
+/** 上传文件/直链音频：底部播放器直接放本地 blob，可边读转写边听、点分段跳转。 */
+function setupTranscribeFilePlayback(file: File): void {
+  try {
+    if (transcribePlaybackUrl) URL.revokeObjectURL(transcribePlaybackUrl);
+    transcribePlaybackUrl = URL.createObjectURL(file);
+    const audio = document.getElementById('transcribe-audio') as HTMLAudioElement | null;
+    if (audio) audio.src = transcribePlaybackUrl;
+    const label = document.getElementById('transcribe-playback-label');
+    if (label) label.textContent = `${file.name} · 点分段跳转`;
+    document.getElementById('transcribe-playback')?.classList.remove('hidden');
+  } catch {
+    // 无法播放的文件忽略（不影响转写）
   }
 }
 
