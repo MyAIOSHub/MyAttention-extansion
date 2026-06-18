@@ -344,6 +344,10 @@ function buildStartSimulcastRequest(params: RuntimeMessageParams): StartSimulcas
     originalVolume: normalizeVolume(params.originalVolume, 0.25),
     translatedVolume: normalizeVolume(params.translatedVolume, 1),
     translatedAudioDelayMs: normalizeSimulcastPlaybackDelayMs(params.translatedAudioDelayMs),
+    translatedMaxPlaybackRate:
+      typeof params.translatedMaxPlaybackRate === 'number'
+        ? params.translatedMaxPlaybackRate
+        : undefined,
     subtitleDisplayMode: getStringParam(
       params.subtitleDisplayMode,
       'bilingual'
@@ -774,6 +778,10 @@ const messageHandlersMap: Record<
       originalVolume: normalizeVolume(params.originalVolume, 0.25),
       translatedVolume: normalizeVolume(params.translatedVolume, 1),
       translatedAudioDelayMs: normalizeSimulcastPlaybackDelayMs(params.translatedAudioDelayMs),
+      translatedMaxPlaybackRate:
+        typeof params.translatedMaxPlaybackRate === 'number'
+          ? params.translatedMaxPlaybackRate
+          : undefined,
     });
     return { status: 'ok', updated: true, simulcast };
   },

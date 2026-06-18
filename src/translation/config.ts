@@ -72,6 +72,7 @@ export interface SimultaneousInterpretationConfig {
   originalVolume: number;
   translatedVolume: number;
   translatedAudioDelayMs: number;
+  translatedMaxPlaybackRate?: number;
   subtitleDisplayMode: SubtitleDisplayMode;
   voiceCloneEnabled: boolean;
   credentials: {
@@ -116,6 +117,7 @@ export function createDefaultSimultaneousInterpretationConfig(): SimultaneousInt
     originalVolume: 0.25,
     translatedVolume: 1,
     translatedAudioDelayMs: 0,
+    translatedMaxPlaybackRate: 1.5,
     subtitleDisplayMode: 'bilingual',
     voiceCloneEnabled: true,
     credentials: {

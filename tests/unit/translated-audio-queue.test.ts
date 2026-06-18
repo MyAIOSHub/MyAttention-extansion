@@ -116,7 +116,7 @@ describe('TranslatedAudioPlaybackQueue', () => {
     expect(queue.size).toBe(0);
   });
 
-  it('slightly accelerates translated TTS playback only while later segments are queued', async () => {
+  it('accelerates translated TTS playback proportionally to the queued backlog', async () => {
     const { audios, queue } = makeQueue();
 
     queue.enqueue({
@@ -126,6 +126,7 @@ describe('TranslatedAudioPlaybackQueue', () => {
       delayMs: 0,
     });
 
+    // 无积压 → 不加速
     expect(audios[0].playbackRate).toBe(1);
 
     queue.enqueue({
@@ -141,17 +142,36 @@ describe('TranslatedAudioPlaybackQueue', () => {
       delayMs: 0,
     });
 
-    expect(audios[0].playbackRate).toBe(1.12);
+    // 2 段在排队 → 1 + 0.12*2 = 1.24（比旧的 1.12 更激进）
+    expect(audios[0].playbackRate).toBeCloseTo(1.24, 5);
 
     audios[0].end();
     await Promise.resolve();
 
-    expect(audios[1].playbackRate).toBeGreaterThan(1);
-    expect(audios[1].playbackRate).toBeLessThanOrEqual(1.12);
+    // 1 段在排队 → 1.12
+    expect(audios[1].playbackRate).toBeCloseTo(1.12, 5);
 
     audios[1].end();
     await Promise.resolve();
 
+    // 无积压 → 回到 1.0
     expect(audios[2].playbackRate).toBe(1);
+  });
+
+  it('caps the adaptive rate at the configured maximum and applies it live', async () => {
+    const { audios, queue } = makeQueue();
+    queue.setMaxPlaybackRate(1.3);
+
+    // 排 6 段，第一段在播、后 5 段排队 → 1 + 0.12*5 = 1.6，被封顶到 1.3
+    for (let id = 1; id <= 6; id += 1) {
+      queue.enqueue({
+        segmentId: id,
+        chunks: [new Uint8Array([id])],
+        getVolume: () => 1,
+        delayMs: 0,
+      });
+    }
+
+    expect(audios[0].playbackRate).toBeCloseTo(1.3, 5);
   });
 });

@@ -30,6 +30,7 @@ export interface StartSimulcastRequest {
   originalVolume: number;
   translatedVolume: number;
   translatedAudioDelayMs: number;
+  translatedMaxPlaybackRate?: number;
   subtitleDisplayMode: SubtitleDisplayMode;
   voiceCloneEnabled: boolean;
   credentials: SimultaneousInterpretationConfig['credentials'];
@@ -40,6 +41,7 @@ export interface UpdateSimulcastPlaybackRequest {
   originalVolume: number;
   translatedVolume: number;
   translatedAudioDelayMs: number;
+  translatedMaxPlaybackRate?: number;
 }
 
 export interface SimulcastRuntimeStatus {
@@ -104,6 +106,7 @@ export class SimulcastRuntime {
           originalVolume: request.originalVolume,
           translatedVolume: request.translatedVolume,
           translatedAudioDelayMs: request.translatedAudioDelayMs,
+          translatedMaxPlaybackRate: request.translatedMaxPlaybackRate,
           subtitleDisplayMode: request.subtitleDisplayMode,
           voiceCloneEnabled: request.voiceCloneEnabled,
           ast: {
@@ -160,6 +163,7 @@ export class SimulcastRuntime {
       originalVolume: request.originalVolume,
       translatedVolume: request.translatedVolume,
       translatedAudioDelayMs: request.translatedAudioDelayMs,
+      translatedMaxPlaybackRate: request.translatedMaxPlaybackRate,
     });
     return this.getStatus();
   }

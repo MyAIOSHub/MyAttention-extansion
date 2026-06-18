@@ -49,14 +49,28 @@ function clampVolume(value: number | undefined, fallback: number): number {
   return Math.min(1, Math.max(0, value));
 }
 
-function computeAdaptivePlaybackRate(pendingSegments: number): number {
+export const DEFAULT_MAX_PLAYBACK_RATE = 1.5;
+const MIN_PLAYBACK_RATE = 1;
+const MAX_PLAYBACK_RATE_LIMIT = 2;
+const PLAYBACK_RATE_STEP_PER_BACKLOG = 0.12;
+
+function clampMaxPlaybackRate(value: number | undefined): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return DEFAULT_MAX_PLAYBACK_RATE;
+  }
+  return Math.min(MAX_PLAYBACK_RATE_LIMIT, Math.max(MIN_PLAYBACK_RATE, value));
+}
+
+/**
+ * 按排队积压连续加速：每多一段排队 +0.12x，封顶到 maxRate（保音高）。
+ * 积压越大放得越快以追回滞后；无积压恢复 1.0x。
+ */
+function computeAdaptivePlaybackRate(pendingSegments: number, maxRate: number): number {
   if (pendingSegments <= 0) {
     return 1;
   }
-  if (pendingSegments === 1) {
-    return 1.06;
-  }
-  return 1.12;
+  const rate = 1 + PLAYBACK_RATE_STEP_PER_BACKLOG * pendingSegments;
+  return Math.min(maxRate, rate);
 }
 
 function setAudioPlaybackRate(audio: HTMLAudioElement, playbackRate: number): void {
@@ -74,6 +88,7 @@ export class TranslatedAudioPlaybackQueue {
   private activeUrl: string | null = null;
   private startTimerId: number | null = null;
   private generation = 0;
+  private maxPlaybackRate = DEFAULT_MAX_PLAYBACK_RATE;
 
   constructor(dependencies: Partial<TranslatedAudioPlaybackQueueDependencies> = {}) {
     this.dependencies = {
@@ -118,6 +133,12 @@ export class TranslatedAudioPlaybackQueue {
     if (this.activeAudio) {
       this.activeAudio.volume = clampVolume(volume, 1);
     }
+  }
+
+  /** 设置追赶译音的最大倍速（夹在 1~2），并立即应用到正在播放的片段。 */
+  setMaxPlaybackRate(maxRate: number | undefined): void {
+    this.maxPlaybackRate = clampMaxPlaybackRate(maxRate);
+    this.updateActivePlaybackRate();
   }
 
   stop(): void {
@@ -176,7 +197,7 @@ export class TranslatedAudioPlaybackQueue {
     const generation = this.generation;
 
     audio.volume = volume;
-    setAudioPlaybackRate(audio, computeAdaptivePlaybackRate(this.queue.length));
+    setAudioPlaybackRate(audio, computeAdaptivePlaybackRate(this.queue.length, this.maxPlaybackRate));
     audio.onended = (): void => {
       if (this.activeAudio !== audio || this.generation !== generation) return;
       item.onTranslatedAudio?.({
@@ -229,7 +250,10 @@ export class TranslatedAudioPlaybackQueue {
 
   private updateActivePlaybackRate(): void {
     if (this.activeAudio) {
-      setAudioPlaybackRate(this.activeAudio, computeAdaptivePlaybackRate(this.queue.length));
+      setAudioPlaybackRate(
+        this.activeAudio,
+        computeAdaptivePlaybackRate(this.queue.length, this.maxPlaybackRate)
+      );
     }
   }
 }

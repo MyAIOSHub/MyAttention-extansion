@@ -28,6 +28,7 @@ interface SimulcastOffscreenStartMessage {
     originalVolume: number;
     translatedVolume: number;
     translatedAudioDelayMs?: number;
+    translatedMaxPlaybackRate?: number;
     subtitleDisplayMode: string;
     voiceCloneEnabled: boolean;
     ast: {
@@ -48,6 +49,7 @@ interface SimulcastOffscreenUpdatePlaybackMessage {
   originalVolume?: number;
   translatedVolume?: number;
   translatedAudioDelayMs?: number;
+  translatedMaxPlaybackRate?: number;
 }
 
 type SimulcastOffscreenMessage =
@@ -246,11 +248,14 @@ function updateActivePlaybackSettings(
   session.translatedAudioDelayMs = normalizeSimulcastPlaybackDelayMs(
     message.translatedAudioDelayMs ?? session.translatedAudioDelayMs
   );
+  session.translatedMaxPlaybackRate =
+    message.translatedMaxPlaybackRate ?? session.translatedMaxPlaybackRate;
 
   if (activeOriginalGain) {
     activeOriginalGain.gain.value = getOriginalPlaybackVolume(session);
   }
   translatedAudioQueue.updateActiveVolume(getTranslatedPlaybackVolume(session));
+  translatedAudioQueue.setMaxPlaybackRate(session.translatedMaxPlaybackRate);
 
   return { status: 'ok', updated: true };
 }
@@ -483,6 +488,7 @@ async function startCapture(message: SimulcastOffscreenStartMessage): Promise<{
   activeAstSession = astSession;
   activeSession = session;
   activeMediaEl = mediaEl ?? null;
+  translatedAudioQueue.setMaxPlaybackRate(session.translatedMaxPlaybackRate);
 
   return {
     status: 'ok',
