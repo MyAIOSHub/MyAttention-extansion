@@ -1,3 +1,8 @@
+import {
+  normalizeSimulcastVideoSyncMode,
+  type SimulcastVideoSyncMode,
+} from '@/simulcast/video-sync-mode';
+
 /**
  * 同声传译音画同步：把页面主视频延迟 N 秒，使其与滞后的译音对齐。
  * 译音天然滞后 N（AST 翻译+TTS），无法追上实时画面 → 只能延迟视频来对齐。
@@ -12,11 +17,22 @@
  */
 
 export type SyncMode = 'vod' | 'live' | 'none';
+export type VideoSyncMode = SimulcastVideoSyncMode;
+
+export interface VideoSyncModeResolution {
+  requestedMode: VideoSyncMode;
+  effectiveMode: VideoSyncMode;
+  strictSyncSupported: boolean;
+  reason?: string;
+}
 
 export interface VideoSyncResult {
   videoFound: boolean;
   mode: SyncMode;
   reason?: string;
+  videoSyncMode?: VideoSyncMode;
+  requestedVideoSyncMode?: VideoSyncMode;
+  strictSyncSupported?: boolean;
 }
 
 export type DynamicVideoSyncAction = 'none' | 'enable' | 'release' | 'rate' | 'seek' | 'live-buffer';
@@ -75,6 +91,27 @@ const DYNAMIC_SYNC_RATE_DRIFT_LIMIT_SEC = 0.6;
 const DYNAMIC_SYNC_RATE_DELTA = 0.04;
 const DYNAMIC_SYNC_MIN_RATE_NUDGE_MS = 1000;
 const DYNAMIC_SYNC_MAX_RATE_NUDGE_MS = 15000;
+const STRICT_SYNC_FALLBACK_REASON =
+  '精准同步由独立播放器处理；当前页面视频控制仅作为标准兼容模式。';
+
+export function resolveRequestedVideoSyncMode(mode?: unknown): VideoSyncModeResolution {
+  const requestedMode = normalizeSimulcastVideoSyncMode(mode);
+
+  if (requestedMode === 'strict-delayed-player') {
+    return {
+      requestedMode,
+      effectiveMode: 'fallback-page-video',
+      strictSyncSupported: false,
+      reason: STRICT_SYNC_FALLBACK_REASON,
+    };
+  }
+
+  return {
+    requestedMode,
+    effectiveMode: requestedMode,
+    strictSyncSupported: false,
+  };
+}
 
 function removeVideoHoldVisual(): void {
   if (!holdVisualState) return;
@@ -592,6 +629,20 @@ export function initSimulcastVideoSyncListener(): void {
     try {
       if (message.enabled) {
         const delaySec = typeof message.delaySec === 'number' ? message.delaySec : 3;
+        const syncMode = resolveRequestedVideoSyncMode(message.videoSyncMode);
+        if (syncMode.effectiveMode === 'subtitles-only') {
+          disableVideoSync();
+          sendResponse({
+            status: 'ok',
+            videoFound: true,
+            mode: 'none',
+            videoCount: countVideos(),
+            videoSyncMode: syncMode.effectiveMode,
+            requestedVideoSyncMode: syncMode.requestedMode,
+            strictSyncSupported: syncMode.strictSyncSupported,
+          });
+          return true;
+        }
         let result: VideoSyncResult;
         if (message.holdUntilAudio) {
           result = holdVideoUntilTranslatedAudio();
@@ -602,7 +653,15 @@ export function initSimulcastVideoSyncListener(): void {
             ? reapplyVideoSync(delaySec)
             : enableVideoSync(delaySec);
         }
-        sendResponse({ status: 'ok', videoCount: countVideos(), ...result });
+        sendResponse({
+          status: 'ok',
+          videoCount: countVideos(),
+          ...result,
+          videoSyncMode: syncMode.effectiveMode,
+          requestedVideoSyncMode: syncMode.requestedMode,
+          strictSyncSupported: syncMode.strictSyncSupported,
+          ...(syncMode.reason ? { reason: syncMode.reason } : {}),
+        });
       } else {
         disableVideoSync();
         sendResponse({ status: 'ok', videoFound: true, mode: 'none' });

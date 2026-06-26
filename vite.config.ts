@@ -31,6 +31,7 @@ export default defineConfig({
         popup: resolve(__dirname, 'src/popup/index.ts'),
         options: resolve(__dirname, 'src/options/index.ts'),
         simulcastOffscreen: resolve(__dirname, 'src/offscreen/simulcast-audio.ts'),
+        simulcastPlayer: resolve(__dirname, 'src/player/simulcast-player.ts'),
       },
       output: {
         entryFileNames: (chunkInfo: { name: string }) => {
@@ -45,6 +46,9 @@ export default defineConfig({
           }
           if (chunkInfo.name === 'simulcastOffscreen') {
             return 'simulcast-offscreen.js';
+          }
+          if (chunkInfo.name === 'simulcastPlayer') {
+            return 'simulcast-player.js';
           }
           return '[name].js';
         },

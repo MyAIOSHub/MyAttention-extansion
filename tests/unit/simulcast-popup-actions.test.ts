@@ -20,6 +20,8 @@ describe('simulcast popup actions', () => {
     expect(popupSource).toContain('appendSimulcastSpeakerLog');
     expect(popupSource).toContain('chrome.tabCapture.getMediaStreamId');
     expect(popupSource).toContain('streamId');
+    expect(popupSource).toContain('getSimulcastVideoSyncModeControlValue');
+    expect(popupSource).toContain("type: 'simulcast:strictPlayerDelay'");
     expect(popupSource).toContain('simulcast-secret-key');
     expect(popupSource).toContain('SIMULCAST_TRANSLATED_AUDIO_PLAYING_STATUS');
     expect(popupSource).toContain("maybeAutoMeasureSyncDelay('subtitle')");
@@ -28,6 +30,7 @@ describe('simulcast popup actions', () => {
     expect(popupSource).toContain('observeTranslatedAudioPlayback');
     expect(popupSource).toContain('handleTranslatedAudioPlaybackStarted');
     expect(popupSource).toContain("type: 'simulcast:dynamicVideoSync'");
+    expect(popupSource).toContain('精准播放器动态延迟');
     expect(popupSource).toContain('自动动态对齐');
     expect(popupSource).toContain('holdUntilAudio: true');
     expect(popupSource).toContain('releaseHold: simulcastVideoHoldPending');

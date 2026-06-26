@@ -145,6 +145,10 @@ import {
 import { VOLCENGINE_AST_EVENTS } from '@/translation/volcengine-ast-protobuf';
 import { normalizeSimulcastPlaybackDelayMs } from '@/offscreen/simulcast-delay';
 import {
+  normalizeSimulcastVideoSyncMode,
+  type SimulcastVideoSyncMode,
+} from '@/simulcast/video-sync-mode';
+import {
   loadLocalCredentialPrefill,
   resolveLlmCredentialPrefill,
   resolveSimulcastCredentialPrefill,
@@ -425,11 +429,16 @@ interface SimulcastUpdateMessage {
     mime?: string;
   };
   translatedAudio?: {
-    event?: 'playback-started' | 'playback-ended';
+    event?: 'playback-scheduled' | 'playback-started' | 'playback-ended';
     segmentId?: number;
     wallTimeMs?: number;
     delayMs?: number;
     playbackRate?: number;
+    sourceStartPts?: number;
+    sourceEndPts?: number;
+    scheduledAtContextTime?: number;
+    outputLatencySec?: number;
+    queuedDurationMs?: number;
   };
   videoClock?: {
     mode?: string;
@@ -657,6 +666,12 @@ function getNumberControlValue(id: string, fallback: number): number {
 
 function getDelayControlValue(id: string): number {
   return normalizeSimulcastPlaybackDelayMs(getControlValue(id, '0'));
+}
+
+function getSimulcastVideoSyncModeControlValue(): SimulcastVideoSyncMode {
+  return normalizeSimulcastVideoSyncMode(
+    getControlValue('simulcast-video-sync-mode', 'fallback-page-video')
+  );
 }
 
 function setControlValue(id: string, value: string | number | undefined): void {
@@ -1119,6 +1134,7 @@ async function handleSimulcastStartClick(): Promise<void> {
     };
 
     buildVolcengineAstHeaders(credentials);
+    const videoSyncMode = getSimulcastVideoSyncModeControlValue();
     const streamIdPromise = acquireTabMediaStreamId();
     setTranslationStatus('simulcast-status', '正在创建当前标签页音频捕获会话...', 'info');
 
@@ -1128,7 +1144,15 @@ async function handleSimulcastStartClick(): Promise<void> {
     }
 
     await beginSimulcastPass(activeTab.url);
-    await holdVideoUntilTranslatedAudio();
+    if (videoSyncMode === 'strict-delayed-player') {
+      simulcastVideoHoldPending = false;
+      setSimulcastSyncStatus('精准同步播放器准备中');
+    } else if (videoSyncMode === 'subtitles-only') {
+      simulcastVideoHoldPending = false;
+      setSimulcastSyncStatus('仅字幕模式');
+    } else {
+      await holdVideoUntilTranslatedAudio();
+    }
 
     const response = await safeSendRuntimeMessage<
       unknown,
@@ -1150,6 +1174,7 @@ async function handleSimulcastStartClick(): Promise<void> {
       translatedVolume: getNumberControlValue('simulcast-translated-volume', 1),
       translatedAudioDelayMs: getDelayControlValue('simulcast-translated-delay-ms'),
       translatedMaxPlaybackRate: getNumberControlValue('simulcast-max-playback-rate', 1),
+      videoSyncMode,
       subtitleDisplayMode: getControlValue('simulcast-subtitle-mode', 'bilingual'),
       voiceCloneEnabled:
         (document.getElementById('simulcast-voice-clone-toggle') as HTMLInputElement | null)
@@ -1462,6 +1487,19 @@ async function sendVideoSync(
   delaySec: number,
   options: { silent?: boolean; releaseHold?: boolean } = {}
 ): Promise<void> {
+  const videoSyncMode = getSimulcastVideoSyncModeControlValue();
+  if (enabled && videoSyncMode === 'strict-delayed-player') {
+    await sendStrictPlayerDelay(delaySec);
+    if (!options.silent) {
+      setSimulcastSyncStatus(`精准播放器延迟 ${delaySec.toFixed(1)}s`);
+    }
+    return;
+  }
+  if (enabled && videoSyncMode === 'subtitles-only') {
+    setSimulcastSyncStatus('仅字幕模式，不控制视频画面');
+    return;
+  }
+
   try {
     const resp = await sendMessageToActiveTab<{
       videoFound?: boolean;
@@ -1472,6 +1510,7 @@ async function sendVideoSync(
       enabled,
       delaySec,
       releaseHold: options.releaseHold === true,
+      videoSyncMode,
     });
     if (!enabled) {
       setSimulcastSyncStatus('');
@@ -1489,6 +1528,21 @@ async function sendVideoSync(
     }
   } catch (error) {
     setSimulcastSyncStatus('同步失败：' + getErrorMessage(error));
+  }
+}
+
+async function sendStrictPlayerDelay(delaySec: number): Promise<void> {
+  const activeTab = await getActiveTab();
+  if (typeof activeTab?.id !== 'number') {
+    throw new Error('未找到当前标签页');
+  }
+  const response = await safeSendRuntimeMessage({
+    type: 'simulcast:strictPlayerDelay',
+    tabId: activeTab.id,
+    targetDelaySec: delaySec,
+  });
+  if (response.status === 'error') {
+    throw new Error(response.error || '更新精准播放器延迟失败');
   }
 }
 
@@ -1512,6 +1566,22 @@ function describeDynamicSyncAction(action: unknown): string {
 }
 
 async function sendDynamicVideoSync(sample: SimulcastDynamicSyncSample): Promise<void> {
+  if (getSimulcastVideoSyncModeControlValue() === 'strict-delayed-player') {
+    try {
+      await sendStrictPlayerDelay(sample.targetDelaySec);
+      setSimulcastSyncStatus(
+        `精准播放器动态延迟 ${sample.targetDelaySec.toFixed(1)}s，实测 ${sample.rawDelaySec.toFixed(
+          1
+        )}s（样本 ${sample.sampleCount}）`
+      );
+    } catch (error) {
+      setSimulcastSyncStatus('精准播放器同步失败：' + getErrorMessage(error));
+    } finally {
+      simulcastVideoHoldPending = false;
+    }
+    return;
+  }
+
   try {
     const resp = await sendMessageToActiveTab<{
       videoFound?: boolean;

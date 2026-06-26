@@ -34,10 +34,12 @@ import {
 import { startTabMonitor, cleanupTabMonitor } from './tab-monitor';
 import { notifySummaryCompleted } from './myisland-client';
 import {
+  SIMULCAST_STRICT_PLAYER_PATH,
   SimulcastRuntime,
   type StartSimulcastRequest,
 } from './simulcast-runtime';
 import { normalizeSimulcastPlaybackDelayMs } from '@/offscreen/simulcast-delay';
+import { normalizeSimulcastVideoSyncMode } from '@/simulcast/video-sync-mode';
 import {
   TranslationIframeRuntime,
   type PageTranslationFrameRequest,
@@ -243,6 +245,36 @@ const simulcastRuntime = new SimulcastRuntime({
   installAstAuthRule: (headers) =>
     installVolcengineAstAuthRule(chrome.declarativeNetRequest, headers),
   removeAstAuthRule: () => removeVolcengineAstAuthRule(chrome.declarativeNetRequest),
+  openStrictPlayerWindow: ({ sessionId, targetDelaySec }) =>
+    new Promise((resolve, reject) => {
+      const params = new URLSearchParams({
+        sessionId,
+        delay: String(targetDelaySec),
+      });
+      chrome.windows.create(
+        {
+          url: chrome.runtime.getURL(`${SIMULCAST_STRICT_PLAYER_PATH}?${params.toString()}`),
+          type: 'popup',
+          width: 960,
+          height: 540,
+          focused: true,
+        },
+        (windowInfo) => {
+          const errorMessage = getChromeLastErrorMessage();
+          if (errorMessage) {
+            reject(new Error(errorMessage));
+            return;
+          }
+          resolve(windowInfo?.id);
+        }
+      );
+    }),
+  closeStrictPlayerWindow: (windowId) =>
+    new Promise((resolve) => {
+      chrome.windows.remove(windowId, () => {
+        resolve();
+      });
+    }),
   now: () => new Date().toISOString(),
   wait: (delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs)),
 });
@@ -348,6 +380,7 @@ function buildStartSimulcastRequest(params: RuntimeMessageParams): StartSimulcas
       typeof params.translatedMaxPlaybackRate === 'number'
         ? params.translatedMaxPlaybackRate
         : undefined,
+    videoSyncMode: normalizeSimulcastVideoSyncMode(params.videoSyncMode),
     subtitleDisplayMode: getStringParam(
       params.subtitleDisplayMode,
       'bilingual'
@@ -782,6 +815,34 @@ const messageHandlersMap: Record<
         typeof params.translatedMaxPlaybackRate === 'number'
           ? params.translatedMaxPlaybackRate
           : undefined,
+    });
+    return { status: 'ok', updated: true, simulcast };
+  },
+
+  'simulcast:strictPlayerDelay': async (params) => {
+    const current = simulcastRuntime.getStatus();
+    const tabId =
+      typeof params.tabId === 'number'
+        ? params.tabId
+        : typeof current.tabId === 'number'
+          ? current.tabId
+          : undefined;
+
+    if (
+      current.state !== 'capturing' ||
+      typeof tabId !== 'number' ||
+      current.tabId !== tabId
+    ) {
+      return { status: 'ok', updated: false, simulcast: current };
+    }
+
+    const targetDelaySec =
+      typeof params.targetDelaySec === 'number' && Number.isFinite(params.targetDelaySec)
+        ? Math.min(8, Math.max(1, params.targetDelaySec))
+        : 1;
+    const simulcast = await simulcastRuntime.updateStrictPlayerDelay({
+      tabId,
+      targetDelaySec,
     });
     return { status: 'ok', updated: true, simulcast };
   },

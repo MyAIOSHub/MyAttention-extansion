@@ -38,6 +38,14 @@ export interface AstWebSocketLike {
   close(): void;
 }
 
+export interface AstAudioChunkTiming {
+  sequence: number;
+  sourceStartPts: number;
+  sourceEndPts: number;
+  capturedAtMs: number;
+  sendAtMs: number;
+}
+
 export interface VolcengineAstSessionDependencies {
   createWebSocket: (url: string) => AstWebSocketLike;
   onSubtitle?: (update: AstSubtitleUpdate) => void;
@@ -70,6 +78,7 @@ async function normalizeMessageData(data: ArrayBuffer | Blob): Promise<Uint8Arra
 export class VolcengineAstSession {
   private socket: AstWebSocketLike | null = null;
   private sequence = 0;
+  private lastAudioChunkTiming: AstAudioChunkTiming | null = null;
   private started = false;
   private startReject: ((error: Error) => void) | null = null;
   private startResolve: (() => void) | null = null;
@@ -160,12 +169,24 @@ export class VolcengineAstSession {
     return this.startedPromise;
   }
 
-  sendAudioChunk(chunk: Uint8Array): void {
+  getLastAudioChunkTiming(): AstAudioChunkTiming | null {
+    return this.lastAudioChunkTiming ? { ...this.lastAudioChunkTiming } : null;
+  }
+
+  sendAudioChunk(chunk: Uint8Array, timing?: AstAudioChunkTiming): void {
     if (!this.started || !this.socket || this.socket.readyState !== WEBSOCKET_OPEN_STATE) {
       return;
     }
 
     this.sequence += 1;
+    this.lastAudioChunkTiming =
+      timing ?? {
+        sequence: this.sequence,
+        sourceStartPts: 0,
+        sourceEndPts: 0,
+        capturedAtMs: performance.now(),
+        sendAtMs: performance.now(),
+      };
     this.socket.send(buildAstTaskRequestFrame(this.config.sessionId, chunk, this.sequence));
   }
 

@@ -7,8 +7,13 @@ import {
   VOLCENGINE_AST_WS_URL,
   buildVolcengineAstHeaders,
 } from '@/translation/volcengine-ast';
+import {
+  normalizeSimulcastVideoSyncMode,
+  type SimulcastVideoSyncMode,
+} from '@/simulcast/video-sync-mode';
 
 export const SIMULCAST_OFFSCREEN_DOCUMENT_PATH = 'html/simulcast_offscreen.html';
+export const SIMULCAST_STRICT_PLAYER_PATH = 'html/simulcast_player.html';
 
 export interface StartSimulcastRequest {
   tabId: number;
@@ -31,6 +36,7 @@ export interface StartSimulcastRequest {
   translatedVolume: number;
   translatedAudioDelayMs: number;
   translatedMaxPlaybackRate?: number;
+  videoSyncMode?: SimulcastVideoSyncMode;
   subtitleDisplayMode: SubtitleDisplayMode;
   voiceCloneEnabled: boolean;
   credentials: SimultaneousInterpretationConfig['credentials'];
@@ -44,12 +50,20 @@ export interface UpdateSimulcastPlaybackRequest {
   translatedMaxPlaybackRate?: number;
 }
 
+export interface UpdateStrictPlayerDelayRequest {
+  tabId: number;
+  targetDelaySec: number;
+}
+
 export interface SimulcastRuntimeStatus {
   state: 'stopped' | 'capturing';
   tabId?: number;
   startedAt?: string;
   sourceLanguage?: string;
   targetLanguage?: string;
+  videoSyncMode?: SimulcastVideoSyncMode;
+  strictPlayerSessionId?: string;
+  strictPlayerWindowId?: number;
 }
 
 export interface SimulcastRuntimeDependencies {
@@ -64,6 +78,11 @@ export interface SimulcastRuntimeDependencies {
   sendRuntimeMessage: (message: Record<string, unknown>) => Promise<unknown>;
   installAstAuthRule: (headers: Record<string, string>) => Promise<void>;
   removeAstAuthRule: () => Promise<void>;
+  openStrictPlayerWindow?: (parameters: {
+    sessionId: string;
+    targetDelaySec: number;
+  }) => Promise<number | undefined>;
+  closeStrictPlayerWindow?: (windowId: number) => Promise<void>;
   now: () => string;
   wait: (delayMs: number) => Promise<void>;
 }
@@ -79,9 +98,20 @@ export class SimulcastRuntime {
 
   async start(request: StartSimulcastRequest): Promise<SimulcastRuntimeStatus> {
     const headers = buildVolcengineAstHeaders(request.credentials);
+    const videoSyncMode = normalizeSimulcastVideoSyncMode(request.videoSyncMode);
+    const strictPlayerSessionId =
+      videoSyncMode === 'strict-delayed-player' ? createRuntimeId() : undefined;
+    let strictPlayerWindowId: number | undefined;
     await this.dependencies.installAstAuthRule(headers);
 
     try {
+      if (strictPlayerSessionId && this.dependencies.openStrictPlayerWindow) {
+        strictPlayerWindowId = await this.dependencies.openStrictPlayerWindow({
+          sessionId: strictPlayerSessionId,
+          targetDelaySec: 1,
+        });
+      }
+
       await this.ensureOffscreenDocument();
       // 麦克风/文件/链接来源无需 tab 媒体流 ID
       const needsTabStream = (request.audioSource ?? 'tab') === 'tab';
@@ -107,6 +137,9 @@ export class SimulcastRuntime {
           translatedVolume: request.translatedVolume,
           translatedAudioDelayMs: request.translatedAudioDelayMs,
           translatedMaxPlaybackRate: request.translatedMaxPlaybackRate,
+          videoSyncMode,
+          strictPlayerSessionId,
+          strictPlayerTargetDelaySec: strictPlayerSessionId ? 1 : undefined,
           subtitleDisplayMode: request.subtitleDisplayMode,
           voiceCloneEnabled: request.voiceCloneEnabled,
           ast: {
@@ -116,6 +149,14 @@ export class SimulcastRuntime {
         },
       });
     } catch (error) {
+      if (
+        typeof strictPlayerWindowId === 'number' &&
+        this.dependencies.closeStrictPlayerWindow
+      ) {
+        await this.dependencies.closeStrictPlayerWindow(strictPlayerWindowId).catch(
+          () => undefined
+        );
+      }
       await this.dependencies.removeAstAuthRule();
       this.status = { state: 'stopped' };
       throw error;
@@ -127,6 +168,9 @@ export class SimulcastRuntime {
       startedAt: this.dependencies.now(),
       sourceLanguage: request.sourceLanguage,
       targetLanguage: request.targetLanguage,
+      videoSyncMode,
+      strictPlayerSessionId,
+      strictPlayerWindowId,
     };
 
     return this.getStatus();
@@ -141,8 +185,37 @@ export class SimulcastRuntime {
       await this.dependencies.closeOffscreenDocument();
     }
 
+    if (
+      typeof this.status.strictPlayerWindowId === 'number' &&
+      this.dependencies.closeStrictPlayerWindow
+    ) {
+      await this.dependencies.closeStrictPlayerWindow(this.status.strictPlayerWindowId).catch(
+        () => undefined
+      );
+    }
+
     await this.dependencies.removeAstAuthRule();
     this.status = { state: 'stopped' };
+    return this.getStatus();
+  }
+
+  async updateStrictPlayerDelay(
+    request: UpdateStrictPlayerDelayRequest
+  ): Promise<SimulcastRuntimeStatus> {
+    if (
+      this.status.state !== 'capturing' ||
+      typeof this.status.tabId !== 'number' ||
+      this.status.tabId !== request.tabId ||
+      this.status.videoSyncMode !== 'strict-delayed-player'
+    ) {
+      return this.getStatus();
+    }
+
+    await this.dependencies.sendRuntimeMessage({
+      type: 'simulcast:offscreenStrictPlayerDelay',
+      tabId: request.tabId,
+      targetDelaySec: request.targetDelaySec,
+    });
     return this.getStatus();
   }
 
@@ -195,6 +268,13 @@ export class SimulcastRuntime {
       }
     }
   }
+}
+
+function createRuntimeId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
 function isOffscreenReceiverNotReady(error: unknown): boolean {

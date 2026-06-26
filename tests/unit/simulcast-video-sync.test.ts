@@ -3,6 +3,7 @@ import {
   isLiveVideo,
   computeSeekTarget,
   findMainVideo,
+  resolveRequestedVideoSyncMode,
   enableVideoSync,
   holdVideoUntilTranslatedAudio,
   initSimulcastVideoSyncListener,
@@ -83,6 +84,25 @@ describe('simulcast-video-sync helpers', () => {
   });
 
   describe('enable / disable', () => {
+    it('classifies direct page-video sync as fallback while strict sync is handled by the player path', () => {
+      expect(resolveRequestedVideoSyncMode()).toEqual({
+        requestedMode: 'fallback-page-video',
+        effectiveMode: 'fallback-page-video',
+        strictSyncSupported: false,
+      });
+      expect(resolveRequestedVideoSyncMode('strict-delayed-player')).toEqual({
+        requestedMode: 'strict-delayed-player',
+        effectiveMode: 'fallback-page-video',
+        strictSyncSupported: false,
+        reason: '精准同步由独立播放器处理；当前页面视频控制仅作为标准兼容模式。',
+      });
+      expect(resolveRequestedVideoSyncMode('subtitles-only')).toEqual({
+        requestedMode: 'subtitles-only',
+        effectiveMode: 'subtitles-only',
+        strictSyncSupported: false,
+      });
+    });
+
     it('VOD: seeks back without muting (tab capture needs the video audio)', () => {
       const v = makeVideo({ w: 640, h: 360, duration: 600, currentTime: 100 });
       v.muted = false;
@@ -249,6 +269,50 @@ describe('simulcast-video-sync helpers', () => {
       expect(v.currentTime).toBe(101);
       expect(v.style.opacity).toBe('');
       expect(document.querySelector('[data-sayso-simulcast-hold="true"]')).toBeNull();
+      vi.unstubAllGlobals();
+    });
+
+    it('returns fallback mode metadata when strict delayed-player sync is requested', () => {
+      let listener:
+        | ((message: any, sender: unknown, sendResponse: (response: any) => void) => boolean | undefined)
+        | undefined;
+      vi.stubGlobal('chrome', {
+        runtime: {
+          sendMessage: vi.fn(),
+          onMessage: {
+            addListener: vi.fn((fn) => {
+              listener = fn;
+            }),
+          },
+        },
+      });
+      makeVideo({ w: 640, h: 360, duration: 600, currentTime: 100 });
+
+      initSimulcastVideoSyncListener();
+      const sendResponse = vi.fn();
+      expect(
+        listener?.(
+          {
+            type: 'simulcast:syncVideo',
+            enabled: true,
+            delaySec: 2,
+            videoSyncMode: 'strict-delayed-player',
+          },
+          {},
+          sendResponse
+        )
+      ).toBe(true);
+
+      expect(sendResponse).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: 'ok',
+          videoFound: true,
+          videoSyncMode: 'fallback-page-video',
+          requestedVideoSyncMode: 'strict-delayed-player',
+          strictSyncSupported: false,
+          reason: '精准同步由独立播放器处理；当前页面视频控制仅作为标准兼容模式。',
+        })
+      );
       vi.unstubAllGlobals();
     });
   });

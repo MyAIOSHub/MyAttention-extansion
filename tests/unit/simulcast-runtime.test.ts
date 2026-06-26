@@ -69,7 +69,7 @@ describe('SimulcastRuntime', () => {
     });
     expect(dependencies.sendRuntimeMessage).toHaveBeenCalledWith({
       type: 'simulcast:offscreenStart',
-      session: {
+      session: expect.objectContaining({
         tabId: 42,
         streamId: 'stream-id-1',
         audioSource: 'tab',
@@ -81,6 +81,7 @@ describe('SimulcastRuntime', () => {
         originalVolume: 0.25,
         translatedVolume: 0.9,
         translatedAudioDelayMs: 1200,
+        videoSyncMode: 'fallback-page-video',
         subtitleDisplayMode: 'bilingual',
         voiceCloneEnabled: true,
         ast: {
@@ -90,8 +91,52 @@ describe('SimulcastRuntime', () => {
             'X-Api-Resource-Id': 'volc.service_type.10053',
           },
         },
-      },
+      }),
     });
+  });
+
+  it('opens a strict delayed player and forwards dynamic delay updates', async () => {
+    const closeStrictPlayerWindow = vi.fn().mockResolvedValue(undefined);
+    const { dependencies, runtime } = createRuntime({
+      openStrictPlayerWindow: vi.fn().mockResolvedValue(99),
+      closeStrictPlayerWindow,
+    });
+
+    const result = await runtime.start({
+      ...baseRequest,
+      videoSyncMode: 'strict-delayed-player',
+    });
+
+    expect(dependencies.openStrictPlayerWindow).toHaveBeenCalledWith({
+      sessionId: expect.any(String),
+      targetDelaySec: 1,
+    });
+    expect(result).toMatchObject({
+      state: 'capturing',
+      videoSyncMode: 'strict-delayed-player',
+      strictPlayerSessionId: expect.any(String),
+      strictPlayerWindowId: 99,
+    });
+    expect(dependencies.sendRuntimeMessage).toHaveBeenCalledWith({
+      type: 'simulcast:offscreenStart',
+      session: expect.objectContaining({
+        videoSyncMode: 'strict-delayed-player',
+        strictPlayerSessionId: result.strictPlayerSessionId,
+        strictPlayerTargetDelaySec: 1,
+      }),
+    });
+
+    await runtime.updateStrictPlayerDelay({ tabId: 42, targetDelaySec: 2.3 });
+
+    expect(dependencies.sendRuntimeMessage).toHaveBeenLastCalledWith({
+      type: 'simulcast:offscreenStrictPlayerDelay',
+      tabId: 42,
+      targetDelaySec: 2.3,
+    });
+
+    await runtime.stop();
+
+    expect(closeStrictPlayerWindow).toHaveBeenCalledWith(99);
   });
 
   it('reuses an existing offscreen document', async () => {

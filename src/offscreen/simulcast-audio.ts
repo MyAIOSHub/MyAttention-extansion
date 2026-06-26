@@ -1,4 +1,11 @@
-import { PcmChunker, AST_PCM_CHUNK_BYTES, downsampleFloat32, floatTo16BitPcm } from './pcm-audio';
+import {
+  AST_PCM_CHUNK_BYTES,
+  AST_TARGET_SAMPLE_RATE,
+  TimedPcmChunker,
+  downsampleFloat32,
+  floatTo16BitPcm,
+  type TimedPcmChunk,
+} from './pcm-audio';
 import { resolveAstLanguagePair } from './ast-language';
 import { VolcengineAstSession, type AstWebSocketLike } from './volcengine-ast-session';
 import { VOLCENGINE_AST_EVENTS } from '@/translation/volcengine-ast-protobuf';
@@ -7,6 +14,11 @@ import {
   TranslatedAudioPlaybackQueue,
   type TranslatedAudioPlaybackEvent,
 } from './translated-audio-queue';
+import { StrictDelayedVideoRelay } from './simulcast-video-relay';
+import {
+  normalizeSimulcastVideoSyncMode,
+  type SimulcastVideoSyncMode,
+} from '@/simulcast/video-sync-mode';
 
 interface SimulcastOffscreenStartMessage {
   type: 'simulcast:offscreenStart';
@@ -29,6 +41,9 @@ interface SimulcastOffscreenStartMessage {
     translatedVolume: number;
     translatedAudioDelayMs?: number;
     translatedMaxPlaybackRate?: number;
+    videoSyncMode?: SimulcastVideoSyncMode;
+    strictPlayerSessionId?: string;
+    strictPlayerTargetDelaySec?: number;
     subtitleDisplayMode: string;
     voiceCloneEnabled: boolean;
     ast: {
@@ -52,10 +67,17 @@ interface SimulcastOffscreenUpdatePlaybackMessage {
   translatedMaxPlaybackRate?: number;
 }
 
+interface SimulcastOffscreenStrictPlayerDelayMessage {
+  type: 'simulcast:offscreenStrictPlayerDelay';
+  tabId?: number;
+  targetDelaySec?: number;
+}
+
 type SimulcastOffscreenMessage =
   | SimulcastOffscreenStartMessage
   | SimulcastOffscreenStopMessage
-  | SimulcastOffscreenUpdatePlaybackMessage;
+  | SimulcastOffscreenUpdatePlaybackMessage
+  | SimulcastOffscreenStrictPlayerDelayMessage;
 
 declare global {
   interface Window {
@@ -73,6 +95,8 @@ let activeSession: SimulcastOffscreenStartMessage['session'] | null = null;
 let ttsChunks: Uint8Array[] = [];
 let nextTtsSegmentId = 1;
 let activeTtsSegmentId = 0;
+let activeTtsSourceStartPts: number | undefined;
+let activeTtsSourceEndPts: number | undefined;
 const translatedAudioQueue = new TranslatedAudioPlaybackQueue();
 // 转写录音（仅 recordAudio 会话）
 let activeRecorder: MediaRecorder | null = null;
@@ -81,6 +105,7 @@ let recordTabId: number | null = null;
 // 文件/链接转写的媒体元素
 let activeMediaEl: HTMLAudioElement | null = null;
 let activeMediaObjectUrl: string | null = null;
+let activeVideoRelay: StrictDelayedVideoRelay | null = null;
 
 /** 从文件字节(base64)或直链 URL 构建可读样本的音频元素（同源 blob，不污染 Web Audio）。 */
 async function buildMediaSourceElement(
@@ -178,6 +203,8 @@ function stopActiveCapture(): void {
 
   activeStream?.getTracks().forEach((track) => track.stop());
   activeStream = null;
+  activeVideoRelay?.stop();
+  activeVideoRelay = null;
 
   // 文件/链接媒体元素收尾
   if (activeMediaEl) {
@@ -194,12 +221,18 @@ function stopActiveCapture(): void {
   activeAudioContext = null;
 
   stopTranslatedAudios();
+  translatedAudioQueue.setAudioContext(null);
   ttsChunks = [];
   activeTtsSegmentId = 0;
+  activeTtsSourceStartPts = undefined;
+  activeTtsSourceEndPts = undefined;
   nextTtsSegmentId = 1;
 }
 
-function createTabAudioConstraints(streamId: string): MediaStreamConstraints {
+function createTabCaptureConstraints(
+  streamId: string,
+  includeVideo: boolean
+): MediaStreamConstraints {
   return {
     audio: {
       mandatory: {
@@ -207,7 +240,14 @@ function createTabAudioConstraints(streamId: string): MediaStreamConstraints {
         chromeMediaSourceId: streamId,
       },
     } as unknown as MediaTrackConstraints,
-    video: false,
+    video: includeVideo
+      ? ({
+          mandatory: {
+            chromeMediaSource: 'tab',
+            chromeMediaSourceId: streamId,
+          },
+        } as unknown as MediaTrackConstraints)
+      : false,
   };
 }
 
@@ -260,6 +300,25 @@ function updateActivePlaybackSettings(
   return { status: 'ok', updated: true };
 }
 
+function updateStrictPlayerDelay(
+  message: SimulcastOffscreenStrictPlayerDelayMessage
+): { status: 'ok'; updated: boolean } {
+  const session = activeSession;
+  if (!session || !activeVideoRelay) {
+    return { status: 'ok', updated: false };
+  }
+  if (typeof message.tabId === 'number' && message.tabId !== session.tabId) {
+    return { status: 'ok', updated: false };
+  }
+  if (typeof message.targetDelaySec !== 'number') {
+    return { status: 'ok', updated: false };
+  }
+
+  session.strictPlayerTargetDelaySec = message.targetDelaySec;
+  activeVideoRelay.updateDelaySec(message.targetDelaySec);
+  return { status: 'ok', updated: true };
+}
+
 function playTranslatedAudio(
   segmentId: number,
   chunks: Uint8Array[],
@@ -273,6 +332,10 @@ function playTranslatedAudio(
     chunks,
     getVolume,
     delayMs,
+    sourceStartPts: activeTtsSourceStartPts,
+    sourceEndPts: activeTtsSourceEndPts,
+    receivedAtMs: performance.now(),
+    codec: 'audio/ogg; codecs=opus',
     onPlaybackStatus,
     onTranslatedAudio,
   });
@@ -314,9 +377,13 @@ function createAstSession(message: SimulcastOffscreenStartMessage): VolcengineAs
         if (response.event === VOLCENGINE_AST_EVENTS.TTSSentenceStart) {
           ttsChunks = [];
           activeTtsSegmentId = nextTtsSegmentId++;
+          activeTtsSourceStartPts = normalizeProviderTimeToSeconds(response.startTime);
+          activeTtsSourceEndPts = normalizeProviderTimeToSeconds(response.endTime);
         }
         if (response.event === VOLCENGINE_AST_EVENTS.TTSSentenceEnd) {
           const segmentId = activeTtsSegmentId || nextTtsSegmentId++;
+          activeTtsSourceEndPts =
+            normalizeProviderTimeToSeconds(response.endTime) ?? activeTtsSourceEndPts;
           playTranslatedAudio(
             segmentId,
             ttsChunks,
@@ -341,10 +408,29 @@ function createAstSession(message: SimulcastOffscreenStartMessage): VolcengineAs
           );
           ttsChunks = [];
           activeTtsSegmentId = 0;
+          activeTtsSourceStartPts = undefined;
+          activeTtsSourceEndPts = undefined;
         }
       },
     }
   );
+}
+
+function normalizeProviderTimeToSeconds(value: number | undefined): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+  return value > 1000 ? value / 1000 : value;
+}
+
+function sendTimedAudioChunk(astSession: VolcengineAstSession, chunk: TimedPcmChunk): void {
+  astSession.sendAudioChunk(chunk.bytes, {
+    sequence: chunk.sequence,
+    sourceStartPts: chunk.sourceStartPts,
+    sourceEndPts: chunk.sourceEndPts,
+    capturedAtMs: chunk.capturedAtMs,
+    sendAtMs: performance.now(),
+  });
 }
 
 function connectAudioToAst(
@@ -352,14 +438,18 @@ function connectAudioToAst(
   source: AudioNode,
   astSession: VolcengineAstSession
 ): ScriptProcessorNode {
-  const pcmChunker = new PcmChunker(AST_PCM_CHUNK_BYTES, (chunk) => {
-    astSession.sendAudioChunk(chunk);
+  const pcmChunker = new TimedPcmChunker({
+    chunkSize: AST_PCM_CHUNK_BYTES,
+    sampleRate: AST_TARGET_SAMPLE_RATE,
+    onChunk: (chunk) => {
+      sendTimedAudioChunk(astSession, chunk);
+    },
   });
   const processor = audioContext.createScriptProcessor(4096, 1, 1);
   processor.onaudioprocess = (event): void => {
     const channel = event.inputBuffer.getChannelData(0);
-    const downsampled = downsampleFloat32(channel, audioContext.sampleRate, 16000);
-    pcmChunker.push(floatTo16BitPcm(downsampled));
+    const downsampled = downsampleFloat32(channel, audioContext.sampleRate, AST_TARGET_SAMPLE_RATE);
+    pcmChunker.push(floatTo16BitPcm(downsampled), performance.now());
   };
   source.connect(processor);
   processor.connect(audioContext.destination);
@@ -403,6 +493,12 @@ async function startCapture(message: SimulcastOffscreenStartMessage): Promise<{
 
   const session = message.session;
   const isMedia = session.audioSource === 'file' || session.audioSource === 'url';
+  const videoSyncMode = normalizeSimulcastVideoSyncMode(session.videoSyncMode);
+  const strictVideoEnabled =
+    !isMedia &&
+    videoSyncMode === 'strict-delayed-player' &&
+    typeof session.strictPlayerSessionId === 'string' &&
+    session.strictPlayerSessionId.length > 0;
 
   let stream: MediaStream | undefined;
   let audioContext: AudioContext | undefined;
@@ -411,6 +507,7 @@ async function startCapture(message: SimulcastOffscreenStartMessage): Promise<{
   let processor: ScriptProcessorNode | undefined;
   let astSession: VolcengineAstSession | undefined;
   let mediaEl: HTMLAudioElement | undefined;
+  let videoRelay: StrictDelayedVideoRelay | undefined;
 
   try {
     const AudioContextClass = window.AudioContext || window.webkitAudioContext;
@@ -424,7 +521,7 @@ async function startCapture(message: SimulcastOffscreenStartMessage): Promise<{
       stream = await navigator.mediaDevices.getUserMedia(
         session.audioSource === 'mic'
           ? { audio: true, video: false }
-          : createTabAudioConstraints(session.streamId)
+          : createTabCaptureConstraints(session.streamId, strictVideoEnabled)
       );
       if (session.recordAudio && stream) {
         recordedChunks = [];
@@ -442,6 +539,16 @@ async function startCapture(message: SimulcastOffscreenStartMessage): Promise<{
       }
       source = audioContext.createMediaStreamSource(stream);
       originalGain = connectOriginalPlayback(audioContext, source, session);
+      if (strictVideoEnabled && stream) {
+        videoRelay = new StrictDelayedVideoRelay({
+          sessionId: session.strictPlayerSessionId!,
+          targetDelaySec: session.strictPlayerTargetDelaySec ?? 1,
+        });
+        const relayStarted = await videoRelay.start(stream);
+        if (!relayStarted) {
+          videoRelay = undefined;
+        }
+      }
     }
 
     astSession = createAstSession(message);
@@ -464,6 +571,7 @@ async function startCapture(message: SimulcastOffscreenStartMessage): Promise<{
       await mediaEl.play();
     }
   } catch (error) {
+    videoRelay?.stop();
     cleanupFailedCapture({ stream, audioContext, source, originalGain, processor, astSession });
     if (mediaEl) {
       mediaEl.pause();
@@ -488,6 +596,8 @@ async function startCapture(message: SimulcastOffscreenStartMessage): Promise<{
   activeAstSession = astSession;
   activeSession = session;
   activeMediaEl = mediaEl ?? null;
+  activeVideoRelay = videoRelay ?? null;
+  translatedAudioQueue.setAudioContext(audioContext);
   translatedAudioQueue.setBasePlaybackRate(session.translatedMaxPlaybackRate);
 
   return {
@@ -505,6 +615,11 @@ chrome.runtime.onMessage.addListener((message: SimulcastOffscreenMessage, sender
 
   if (message.type === 'simulcast:offscreenUpdatePlayback') {
     sendResponse(updateActivePlaybackSettings(message));
+    return true;
+  }
+
+  if (message.type === 'simulcast:offscreenStrictPlayerDelay') {
+    sendResponse(updateStrictPlayerDelay(message));
     return true;
   }
 

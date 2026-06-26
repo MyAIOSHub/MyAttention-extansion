@@ -1596,6 +1596,14 @@
                 <option value="off">关闭字幕</option>
               </select>
             </div>
+            <div class="col-span-2">
+              <label class="block text-xs font-medium text-gray-600 mb-1">音画同步模式</label>
+              <select id="simulcast-video-sync-mode" class="w-full text-sm border border-gray-200 rounded-lg px-2 py-2 bg-white">
+                <option value="fallback-page-video" selected>标准同步（当前页面延迟）</option>
+                <option value="strict-delayed-player">精准同步（独立播放器）</option>
+                <option value="subtitles-only">仅字幕（不控制视频）</option>
+              </select>
+            </div>
           </div>
 
           <div class="space-y-2 mb-3">

@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SaySo 精准同传播放器</title>
+  <style>
+    html,
+    body {
+      height: 100%;
+      margin: 0;
+      background: #050505;
+      color: #f5f5f5;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    body {
+      display: grid;
+      grid-template-rows: 1fr auto;
+      overflow: hidden;
+    }
+
+    canvas {
+      width: 100%;
+      height: 100%;
+      background: #050505;
+      object-fit: contain;
+    }
+
+    .status {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 10px 14px;
+      border-top: 1px solid rgba(255, 255, 255, 0.12);
+      background: rgba(5, 5, 5, 0.92);
+      font-size: 12px;
+      color: #d6d6d6;
+    }
+
+    .status strong {
+      color: #ffffff;
+      font-weight: 600;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="simulcast-player-canvas"></canvas>
+  <div class="status">
+    <span><strong>SaySo 精准同传</strong> <span id="simulcast-player-status">等待视频帧…</span></span>
+    <span id="simulcast-player-delay">延迟 1.0s</span>
+  </div>
+  <script type="module" src="../simulcast-player.js"></script>
+</body>
+</html>

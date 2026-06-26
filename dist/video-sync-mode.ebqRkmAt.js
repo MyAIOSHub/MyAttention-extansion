@@ -1,0 +1,1 @@
+const e="fallback-page-video",n="sayso:simulcast:strict-player:";function s(t){return t==="strict-delayed-player"||t==="subtitles-only"?t:e}function a(t){return"".concat(n).concat(t)}export{a as g,s as n};

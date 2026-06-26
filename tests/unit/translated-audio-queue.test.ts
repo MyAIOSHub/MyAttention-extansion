@@ -2,6 +2,67 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { TranslatedAudioPlaybackQueue } from '@/offscreen/translated-audio-queue';
 
+class FakeAudioBuffer {
+  constructor(readonly duration: number) {}
+}
+
+class FakeBufferSource {
+  buffer: FakeAudioBuffer | null = null;
+  onended: (() => void) | null = null;
+  playbackRate = { value: 1 };
+  readonly connect = vi.fn();
+  readonly disconnect = vi.fn();
+  readonly start = vi.fn();
+  readonly stop = vi.fn();
+
+  end(): void {
+    this.onended?.();
+  }
+}
+
+class FakeGainNode {
+  gain = { value: 1 };
+  readonly connect = vi.fn();
+  readonly disconnect = vi.fn();
+}
+
+function makeAudioContextQueue() {
+  const sources: FakeBufferSource[] = [];
+  const timers = new Map<number, { callback: () => void; delayMs: number }>();
+  let nextTimerId = 1;
+  const decodedDurations = [0.4, 0.4, 0.7, 0.7, 0.7];
+  const context = {
+    currentTime: 10,
+    destination: {},
+    outputLatency: 0.03,
+    decodeAudioData: vi.fn().mockImplementation(async () => {
+      return new FakeAudioBuffer(decodedDurations.shift() ?? 0.4);
+    }),
+    createBufferSource: vi.fn().mockImplementation(() => {
+      const source = new FakeBufferSource();
+      sources.push(source);
+      return source;
+    }),
+    createGain: vi.fn().mockImplementation(() => new FakeGainNode()),
+    getOutputTimestamp: vi.fn(() => ({ contextTime: context.currentTime, performanceTime: 5_000 })),
+  };
+
+  const queue = new TranslatedAudioPlaybackQueue({
+    audioContext: context as unknown as AudioContext,
+    setTimeout: (callback, delayMs) => {
+      const id = nextTimerId++;
+      timers.set(id, { callback, delayMs });
+      return id;
+    },
+    clearTimeout: (id) => {
+      timers.delete(id);
+    },
+    now: () => 1_000,
+  });
+
+  return { context, queue, sources, timers };
+}
+
 class FakeAudio {
   onended: (() => void) | null = null;
   volume = 1;
@@ -49,6 +110,90 @@ function makeQueue() {
 }
 
 describe('TranslatedAudioPlaybackQueue', () => {
+  it('schedules decoded translated audio on the AudioContext source timeline', async () => {
+    const { context, queue, sources, timers } = makeAudioContextQueue();
+    const events: unknown[] = [];
+
+    queue.enqueue({
+      segmentId: 1,
+      chunks: [new Uint8Array([1])],
+      getVolume: () => 1,
+      delayMs: 2_000,
+      sourceStartPts: 4,
+      sourceEndPts: 4.4,
+      receivedAtMs: 900,
+      onTranslatedAudio: (event) => events.push(event),
+    });
+    queue.enqueue({
+      segmentId: 2,
+      chunks: [new Uint8Array([2])],
+      getVolume: () => 1,
+      delayMs: 2_000,
+      sourceStartPts: 4.4,
+      sourceEndPts: 4.8,
+      receivedAtMs: 950,
+      onTranslatedAudio: (event) => events.push(event),
+    });
+
+    await queue.waitUntilIdle();
+
+    expect(context.decodeAudioData).toHaveBeenCalledTimes(2);
+    expect(sources).toHaveLength(2);
+    expect(sources[0].start).toHaveBeenCalledWith(12);
+    expect(sources[1].start).toHaveBeenCalledWith(12.4);
+    expect(Array.from(timers.values()).map((timer) => timer.delayMs)).toEqual([2000, 2400]);
+    expect(events).toEqual([
+      expect.objectContaining({
+        event: 'playback-scheduled',
+        segmentId: 1,
+        sourceStartPts: 4,
+        scheduledAtContextTime: 12,
+        outputLatencySec: 0.03,
+      }),
+      expect.objectContaining({
+        event: 'playback-scheduled',
+        segmentId: 2,
+        sourceStartPts: 4.4,
+        scheduledAtContextTime: 12.4,
+        outputLatencySec: 0.03,
+      }),
+    ]);
+  });
+
+  it('uses queued duration instead of segment count for AudioContext backlog catch-up', async () => {
+    const { queue, sources } = makeAudioContextQueue();
+
+    queue.enqueue({
+      segmentId: 1,
+      chunks: [new Uint8Array([1])],
+      getVolume: () => 1,
+      delayMs: 0,
+      sourceStartPts: 0,
+      sourceEndPts: 0.7,
+    });
+    queue.enqueue({
+      segmentId: 2,
+      chunks: [new Uint8Array([2])],
+      getVolume: () => 1,
+      delayMs: 0,
+      sourceStartPts: 0.7,
+      sourceEndPts: 1.4,
+    });
+    queue.enqueue({
+      segmentId: 3,
+      chunks: [new Uint8Array([3])],
+      getVolume: () => 1,
+      delayMs: 0,
+      sourceStartPts: 1.4,
+      sourceEndPts: 2.1,
+    });
+
+    await queue.waitUntilIdle();
+
+    expect(queue.queuedDurationMs).toBeGreaterThan(1000);
+    expect(sources[2].playbackRate.value).toBeGreaterThan(1);
+  });
+
   it('plays translated TTS segments sequentially instead of starting the next one immediately', async () => {
     const { audios, queue } = makeQueue();
 

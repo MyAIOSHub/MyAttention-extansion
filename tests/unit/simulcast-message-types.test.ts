@@ -11,10 +11,12 @@ describe('simulcast message types', () => {
     expect(typesSource).toContain("'simulcast:getStatus'");
     expect(typesSource).toContain("'simulcast:update'");
     expect(typesSource).toContain("'simulcast:updatePlayback'");
+    expect(typesSource).toContain("'simulcast:strictPlayerDelay'");
     expect(typesSource).toContain("'simulcast:popupUpdate'");
     expect(typesSource).toContain("'simulcast:offscreenStart'");
     expect(typesSource).toContain("'simulcast:offscreenStop'");
     expect(typesSource).toContain("'simulcast:offscreenUpdatePlayback'");
+    expect(typesSource).toContain("'simulcast:offscreenStrictPlayerDelay'");
     expect(typesSource).toContain("'simulcast:syncVideo'");
     expect(typesSource).toContain("'simulcast:videoPlaying'");
     expect(typesSource).toContain("'simulcast:videoStopped'");

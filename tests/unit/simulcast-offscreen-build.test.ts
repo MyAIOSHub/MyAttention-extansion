@@ -16,6 +16,16 @@ describe('simulcast offscreen build assets', () => {
     expect(viteConfig).toContain('simulcastOffscreen');
     expect(viteConfig).toContain('src/offscreen/simulcast-audio.ts');
     expect(viteConfig).toContain('simulcast-offscreen.js');
+    expect(viteConfig).toContain('simulcastPlayer');
+    expect(viteConfig).toContain('src/player/simulcast-player.ts');
+    expect(viteConfig).toContain('simulcast-player.js');
+  });
+
+  it('declares a strict delayed simulcast player page', () => {
+    const htmlPath = join(process.cwd(), 'public', 'html', 'simulcast_player.html');
+
+    expect(existsSync(htmlPath)).toBe(true);
+    expect(readFileSync(htmlPath, 'utf8')).toContain('../simulcast-player.js');
   });
 
   it('streams captured tab audio into Volcengine AST and plays translated TTS audio', () => {
@@ -41,6 +51,8 @@ describe('simulcast offscreen build assets', () => {
     expect(source).toContain("message.type === 'simulcast:offscreenUpdatePlayback'");
     expect(source).toContain('activeOriginalGain.gain.value = getOriginalPlaybackVolume(session)');
     expect(source).toContain('TranslatedAudioPlaybackQueue');
+    expect(source).toContain('StrictDelayedVideoRelay');
+    expect(source).toContain('createTabCaptureConstraints');
     expect(source).toContain('translatedAudioQueue.enqueue');
     expect(source).toContain('translatedAudioQueue.updateActiveVolume');
     expect(source).toContain('translatedAudioQueue.stop');
@@ -48,6 +60,7 @@ describe('simulcast offscreen build assets', () => {
     expect(source).toContain('normalizeSimulcastPlaybackDelayMs');
     expect(source).toContain('translatedAudio');
     expect(queueSource).toContain('playback-started');
+    expect(queueSource).toContain('playback-scheduled');
     expect(queueSource).toContain('playback-ended');
     expect(source).toContain('cleanupFailedCapture');
   });
