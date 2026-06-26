@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   chromeMessageAdapter,
+  isExtensionContextInvalidatedError,
   isRuntimeContextAvailable,
 } from '@/core/chrome-message';
 
@@ -45,5 +46,15 @@ describe('chrome message runtime guard', () => {
         type: 'getSettings',
       } as any)
     ).rejects.toThrow('Extension context invalidated.');
+  });
+
+  it('treats closed async response channels as stale runtime errors', () => {
+    expect(
+      isExtensionContextInvalidatedError(
+        new Error(
+          'A listener indicated an asynchronous response by returning true, but the message channel closed before a response was received'
+        )
+      )
+    ).toBe(true);
   });
 });

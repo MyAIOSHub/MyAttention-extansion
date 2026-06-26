@@ -10,6 +10,7 @@ import type {
 import {
   chromeMessageAdapter,
   isExtensionContextInvalidatedError,
+  isRuntimeContextAvailable,
 } from '@/core/chrome-message';
 import { Logger } from '@/core/errors';
 import { resolveSemanticElementContext } from '@/content/snippets/semantic-block-resolver';
@@ -227,7 +228,11 @@ export class MediaHoverController {
     window.addEventListener('blur', this.handleViewportChange);
     window.addEventListener('resize', this.handleViewportChange);
     document.addEventListener('visibilitychange', this.handleVisibilityChange);
-    chrome.runtime.onMessage.addListener(this.runtimeMessageListener);
+    if (isRuntimeContextAvailable()) {
+      chrome.runtime.onMessage.addListener(this.runtimeMessageListener);
+    } else {
+      Logger.debug('[MediaCapture] 扩展上下文已失效，跳过上下文菜单消息监听');
+    }
   }
 
   stop(): void {
@@ -240,7 +245,9 @@ export class MediaHoverController {
     window.removeEventListener('blur', this.handleViewportChange);
     window.removeEventListener('resize', this.handleViewportChange);
     document.removeEventListener('visibilitychange', this.handleVisibilityChange);
-    chrome.runtime.onMessage.removeListener(this.runtimeMessageListener);
+    if (isRuntimeContextAvailable()) {
+      chrome.runtime.onMessage.removeListener(this.runtimeMessageListener);
+    }
     this.clearTimers();
     this.currentTarget = null;
     this.pendingTarget = null;
@@ -688,7 +695,7 @@ export class MediaHoverController {
       showToast('My Attention 已记录');
     } catch (error) {
       if (isExtensionContextInvalidatedError(error)) {
-        Logger.warn('[MediaHover] 保存媒体跳过：扩展上下文已失效');
+        Logger.debug('[MediaHover] 保存媒体跳过：扩展上下文已失效');
         return;
       }
       Logger.error('[MediaHover] 保存媒体失败:', error);

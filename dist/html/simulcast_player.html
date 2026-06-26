@@ -16,15 +16,56 @@
 
     body {
       display: grid;
-      grid-template-rows: 1fr auto;
+      grid-template-rows: 1fr 76px auto;
       overflow: hidden;
     }
 
-    canvas {
-      width: 100%;
-      height: 100%;
+    .stage {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 0;
+      min-height: 0;
+      overflow: hidden;
       background: #050505;
-      object-fit: contain;
+    }
+
+    canvas {
+      background: #050505;
+      display: block;
+      max-width: 100%;
+      max-height: 100%;
+    }
+
+    .subtitle-bar {
+      display: block;
+      padding: 10px 22px 12px;
+      height: 76px;
+      box-sizing: border-box;
+      background: #0b0b0b;
+      border-top: 1px solid rgba(255, 255, 255, 0.1);
+      text-align: center;
+      overflow: hidden;
+    }
+
+    .subtitle-bar:not(.visible) {
+      visibility: hidden;
+    }
+
+    .subtitle-source {
+      color: #cbd5e1;
+      font-size: 14px;
+      line-height: 1.35;
+      min-height: 18px;
+    }
+
+    .subtitle-translation {
+      color: #ffffff;
+      font-size: 22px;
+      line-height: 1.35;
+      font-weight: 600;
+      min-height: 30px;
+      overflow-wrap: anywhere;
     }
 
     .status {
@@ -43,13 +84,44 @@
       color: #ffffff;
       font-weight: 600;
     }
+
+    .status-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-shrink: 0;
+    }
+
+    .stop-button {
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.08);
+      color: #f5f5f5;
+      font-size: 12px;
+      line-height: 1;
+      padding: 7px 10px;
+      cursor: pointer;
+    }
+
+    .stop-button:hover {
+      background: rgba(255, 255, 255, 0.14);
+    }
   </style>
 </head>
 <body>
-  <canvas id="simulcast-player-canvas"></canvas>
+  <main class="stage" id="simulcast-player-stage">
+    <canvas id="simulcast-player-canvas"></canvas>
+  </main>
+  <section class="subtitle-bar" id="simulcast-player-subtitle">
+    <div class="subtitle-source" id="simulcast-player-subtitle-source"></div>
+    <div class="subtitle-translation" id="simulcast-player-subtitle-translation"></div>
+  </section>
   <div class="status">
     <span><strong>SaySo 精准同传</strong> <span id="simulcast-player-status">等待视频帧…</span></span>
-    <span id="simulcast-player-delay">延迟 1.0s</span>
+    <span class="status-actions">
+      <span id="simulcast-player-delay">延迟 1.0s</span>
+      <button id="simulcast-player-stop" type="button" class="stop-button">停止同传</button>
+    </span>
   </div>
   <script type="module" src="../simulcast-player.js"></script>
 </body>

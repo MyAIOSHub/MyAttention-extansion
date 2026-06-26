@@ -1498,15 +1498,15 @@
         <p class="text-xs text-gray-500">捕获网页音频，调用同传 API 并克隆音色输出</p>
       </div>
 
-      <!-- 开始/停止：置顶。停止仅运行中显示 -->
+      <!-- 开始/停止：置顶。停止按钮常驻，方便 popup 重开后仍能停止后台同传。 -->
       <div class="grid grid-cols-2 gap-2 mb-2">
-        <button id="simulcast-start-btn" class="col-span-2 py-2 text-xs font-medium btn-brand text-white rounded-lg hover:btn-brand transition-colors flex items-center justify-center gap-2">
+        <button id="simulcast-start-btn" class="py-2 text-xs font-medium btn-brand text-white rounded-lg hover:btn-brand transition-colors flex items-center justify-center gap-2">
           <i class="fas fa-play"></i>
           <span>开始同传</span>
         </button>
-        <button id="simulcast-stop-btn" class="hidden py-2 text-xs font-medium bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors flex items-center justify-center gap-2">
+        <button id="simulcast-stop-btn" class="py-2 text-xs font-medium bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors flex items-center justify-center gap-2">
           <i class="fas fa-stop"></i>
-          <span>停止</span>
+          <span>停止同传</span>
         </button>
       </div>
 
@@ -1599,16 +1599,23 @@
             <div class="col-span-2">
               <label class="block text-xs font-medium text-gray-600 mb-1">音画同步模式</label>
               <select id="simulcast-video-sync-mode" class="w-full text-sm border border-gray-200 rounded-lg px-2 py-2 bg-white">
-                <option value="fallback-page-video" selected>标准同步（当前页面延迟）</option>
-                <option value="strict-delayed-player">精准同步（独立播放器）</option>
+                <option value="strict-delayed-player" selected>精准同步（独立播放器）</option>
+                <option value="fallback-page-video">标准同步（当前页面延迟）</option>
                 <option value="subtitles-only">仅字幕（不控制视频）</option>
               </select>
+            </div>
+            <div class="col-span-2">
+              <div class="flex items-center justify-between mb-1">
+                <label class="block text-xs font-medium text-gray-600">精准同步缓冲</label>
+                <span class="text-xs text-gray-400">1-12 s</span>
+              </div>
+              <input id="simulcast-strict-buffer-sec" type="number" min="1" max="12" step="0.5" value="5" class="w-full text-sm border border-gray-200 rounded-lg px-2 py-2" placeholder="5">
             </div>
           </div>
 
           <div class="space-y-2 mb-3">
-            <label class="block text-xs font-medium text-gray-600">原音音量</label>
-            <input id="simulcast-original-volume" type="range" min="0" max="1" step="0.05" value="0.25" class="w-full">
+            <label class="block text-xs font-medium text-gray-600">原声回放</label>
+            <input id="simulcast-original-volume" type="range" min="0" max="1" step="0.05" value="0" class="w-full">
             <label class="block text-xs font-medium text-gray-600">译音音量</label>
             <input id="simulcast-translated-volume" type="range" min="0" max="1" step="0.05" value="1" class="w-full">
             <div>
@@ -1632,10 +1639,6 @@
             <input id="simulcast-voice-clone-toggle" type="checkbox" class="w-4 h-4" checked>
           </label>
 
-          <label class="flex items-center justify-between bg-gray-50 border border-gray-100 rounded-lg px-3 py-2 text-sm">
-            <span class="text-gray-700">自动同传<span class="text-gray-400">（打开扩展后，视频播放即自动开始）</span></span>
-            <input id="simulcast-auto-toggle" type="checkbox" class="w-4 h-4">
-          </label>
         </div>
       </details>
     </div>

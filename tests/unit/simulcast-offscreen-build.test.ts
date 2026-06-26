@@ -25,7 +25,30 @@ describe('simulcast offscreen build assets', () => {
     const htmlPath = join(process.cwd(), 'public', 'html', 'simulcast_player.html');
 
     expect(existsSync(htmlPath)).toBe(true);
-    expect(readFileSync(htmlPath, 'utf8')).toContain('../simulcast-player.js');
+    const html = readFileSync(htmlPath, 'utf8');
+    expect(html).toContain('../simulcast-player.js');
+    expect(html).toContain('simulcast-player-subtitle');
+    expect(html).toContain('subtitle-bar');
+    expect(html).toContain('grid-template-rows: 1fr 76px auto');
+    expect(html).toContain('height: 76px');
+    expect(html).not.toContain('display: none;');
+    expect(html).toContain('simulcast-player-stop');
+    expect(html).toContain('停止同传');
+  });
+
+  it('renders strict player subtitles below the video instead of over the canvas', () => {
+    const source = readFileSync(
+      join(process.cwd(), 'src', 'player', 'simulcast-player.ts'),
+      'utf8'
+    );
+
+    expect(source).toContain("message.type === 'subtitle'");
+    expect(source).toContain('simulcast-player-subtitle-source');
+    expect(source).toContain('simulcast-player-subtitle-translation');
+    expect(source).toContain('SUBTITLE_AUDIO_LEAD_MS');
+    expect(source).toContain('getSubtitleDisplayDelayMs');
+    expect(source).toContain('mergeStreamingText');
+    expect(source).toContain("type: 'simulcast:stop'");
   });
 
   it('streams captured tab audio into Volcengine AST and plays translated TTS audio', () => {

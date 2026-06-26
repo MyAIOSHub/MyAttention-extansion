@@ -58,6 +58,7 @@ function makeAudioContextQueue() {
       timers.delete(id);
     },
     now: () => 1_000,
+    performanceNow: () => 5_000,
   });
 
   return { context, queue, sources, timers };
@@ -108,6 +109,94 @@ function makeQueue() {
 
   return { audios, queue, revoked, timers };
 }
+
+describe('TranslatedAudioPlaybackQueue master-clock mode', () => {
+  it('schedules at source-wall-origin + fixed buffer (locked to video frames)', async () => {
+    const { queue, sources } = makeAudioContextQueue();
+    // wall→ctx 映射（fake getOutputTimestamp）：ctx = 10 + (wall - 5000)/1000
+    queue.setSourceTimeline({ originWallMs: 5000, bufferMs: 2000 });
+    queue.enqueue({
+      segmentId: 1,
+      chunks: [new Uint8Array([1])],
+      getVolume: () => 1,
+      delayMs: 0,
+      sourceStartPts: 4,
+      sourceEndPts: 4.4,
+    });
+    await queue.waitUntilIdle();
+    // targetWall = 5000 + 4*1000 + 2000 = 11000 → ctx = 10 + 6 = 16
+    expect(sources[0].start).toHaveBeenCalledWith(16);
+  });
+
+  it('grows the buffer (one-way) and notifies the relay when a segment lands late', async () => {
+    const { queue, sources } = makeAudioContextQueue();
+    const grows: number[] = [];
+    queue.setSourceTimeline({ originWallMs: 5000, bufferMs: 0, onBufferGrow: (s) => grows.push(s) });
+    // 两段都锚到同一源时间(pts=0)；第一段占住时间线，第二段被迫排到其后 → shortfall → 缓冲增长。
+    queue.enqueue({ segmentId: 1, chunks: [new Uint8Array([1])], getVolume: () => 1, delayMs: 0, sourceStartPts: 0, sourceEndPts: 0 });
+    queue.enqueue({ segmentId: 2, chunks: [new Uint8Array([2])], getVolume: () => 1, delayMs: 0, sourceStartPts: 0, sourceEndPts: 0 });
+    await queue.waitUntilIdle();
+    // 第一段 dur 0.4 → lastEnd 10.4；第二段理想 ctx=10，被钳到 10.4 → shortfall 0.4s → 缓冲增至 0.4s。
+    expect(sources[0].start).toHaveBeenCalledWith(10);
+    expect(sources[1].start).toHaveBeenCalledWith(10.4);
+    expect(grows).toHaveLength(1);
+    expect(grows[0]).toBeCloseTo(0.4, 5);
+  });
+
+  it('does not boost playback rate in master mode even with backlog', async () => {
+    const { queue, sources } = makeAudioContextQueue();
+    queue.setSourceTimeline({ originWallMs: 5000, bufferMs: 0 });
+    for (let id = 1; id <= 3; id += 1) {
+      queue.enqueue({ segmentId: id, chunks: [new Uint8Array([id])], getVolume: () => 1, delayMs: 0, sourceStartPts: 0, sourceEndPts: 0 });
+    }
+    await queue.waitUntilIdle();
+    expect(sources.every((s) => s.playbackRate.value === 1)).toBe(true);
+  });
+
+  it('falls back to sequential (no master target, no grow) when a segment lacks sourceStartPts', async () => {
+    const { queue, sources } = makeAudioContextQueue();
+    const grows: number[] = [];
+    queue.setSourceTimeline({ originWallMs: 5000, bufferMs: 2000, onBufferGrow: (s) => grows.push(s) });
+    queue.enqueue({ segmentId: 1, chunks: [new Uint8Array([1])], getVolume: () => 1, delayMs: 0 });
+    await queue.waitUntilIdle();
+    expect(sources).toHaveLength(1);
+    expect(grows).toEqual([]);
+  });
+
+  it('uses the currentTime/performanceNow fallback when getOutputTimestamp is missing', async () => {
+    const sources: FakeBufferSource[] = [];
+    const timers = new Map<number, { callback: () => void; delayMs: number }>();
+    let nextTimerId = 1;
+    const context = {
+      currentTime: 10,
+      destination: {},
+      decodeAudioData: vi.fn().mockResolvedValue(new FakeAudioBuffer(0.4)),
+      createBufferSource: vi.fn().mockImplementation(() => {
+        const s = new FakeBufferSource();
+        sources.push(s);
+        return s;
+      }),
+      createGain: vi.fn().mockImplementation(() => new FakeGainNode()),
+      // 无 getOutputTimestamp → 走 currentTime + (wall - performanceNow)/1000 兜底
+    };
+    const queue = new TranslatedAudioPlaybackQueue({
+      audioContext: context as unknown as AudioContext,
+      setTimeout: (cb, delayMs) => {
+        const id = nextTimerId++;
+        timers.set(id, { callback: cb, delayMs });
+        return id;
+      },
+      clearTimeout: (id) => timers.delete(id),
+      now: () => 1_000,
+      performanceNow: () => 5_000,
+    });
+    queue.setSourceTimeline({ originWallMs: 5000, bufferMs: 2000 });
+    queue.enqueue({ segmentId: 1, chunks: [new Uint8Array([1])], getVolume: () => 1, delayMs: 0, sourceStartPts: 4, sourceEndPts: 4.4 });
+    await queue.waitUntilIdle();
+    // 兜底映射与 getOutputTimestamp 同结果：ctx = 10 + (11000-5000)/1000 = 16
+    expect(sources[0].start).toHaveBeenCalledWith(16);
+  });
+});
 
 describe('TranslatedAudioPlaybackQueue', () => {
   it('schedules decoded translated audio on the AudioContext source timeline', async () => {

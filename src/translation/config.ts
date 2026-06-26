@@ -114,7 +114,7 @@ export function createDefaultSimultaneousInterpretationConfig(): SimultaneousInt
     provider: 'volcengine',
     model: DEFAULT_VOLCENGINE_AST_MODEL_ID,
     audioOutputMode: 'translatedOnly',
-    originalVolume: 0.25,
+    originalVolume: 0,
     translatedVolume: 1,
     translatedAudioDelayMs: 0,
     translatedMaxPlaybackRate: 1,

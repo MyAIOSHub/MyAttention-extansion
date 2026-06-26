@@ -13,6 +13,7 @@ import {
   applyDynamicVideoSyncControl,
   isVideoSyncActive,
   countVideos,
+  getMainVideoViewportRect,
 } from '../../src/content/simulcast-video-sync';
 
 interface FakeOpts {
@@ -21,6 +22,9 @@ interface FakeOpts {
   duration: number;
   currentTime?: number;
   top?: number;
+  videoWidth?: number;
+  videoHeight?: number;
+  objectFit?: string;
 }
 
 function makeVideo(opts: FakeOpts): HTMLVideoElement {
@@ -31,6 +35,11 @@ function makeVideo(opts: FakeOpts): HTMLVideoElement {
   });
   Object.defineProperty(v, 'readyState', { configurable: true, value: 2 });
   Object.defineProperty(v, 'duration', { configurable: true, value: opts.duration });
+  Object.defineProperty(v, 'videoWidth', { configurable: true, value: opts.videoWidth ?? opts.w });
+  Object.defineProperty(v, 'videoHeight', { configurable: true, value: opts.videoHeight ?? opts.h });
+  if (opts.objectFit) {
+    v.style.objectFit = opts.objectFit;
+  }
   let ct = opts.currentTime ?? 0;
   Object.defineProperty(v, 'currentTime', {
     configurable: true,
@@ -83,12 +92,39 @@ describe('simulcast-video-sync helpers', () => {
     });
   });
 
+  describe('getMainVideoViewportRect', () => {
+    it('returns the rendered video content rect when object-fit contain adds letterbox bars', () => {
+      makeVideo({
+        w: 640,
+        h: 480,
+        duration: 600,
+        videoWidth: 1920,
+        videoHeight: 1080,
+        objectFit: 'contain',
+      });
+
+      expect(getMainVideoViewportRect()).toMatchObject({
+        left: 0,
+        top: 70,
+        width: 640,
+        height: 360,
+      });
+    });
+  });
+
   describe('enable / disable', () => {
     it('classifies direct page-video sync as fallback while strict sync is handled by the player path', () => {
-      expect(resolveRequestedVideoSyncMode()).toEqual({
+      expect(resolveRequestedVideoSyncMode('fallback-page-video')).toEqual({
         requestedMode: 'fallback-page-video',
         effectiveMode: 'fallback-page-video',
         strictSyncSupported: false,
+      });
+      // 缺省（无显式模式）现在默认精准同步，内容脚本侧降级为页面兼容控制。
+      expect(resolveRequestedVideoSyncMode()).toEqual({
+        requestedMode: 'strict-delayed-player',
+        effectiveMode: 'fallback-page-video',
+        strictSyncSupported: false,
+        reason: '精准同步由独立播放器处理；当前页面视频控制仅作为标准兼容模式。',
       });
       expect(resolveRequestedVideoSyncMode('strict-delayed-player')).toEqual({
         requestedMode: 'strict-delayed-player',
@@ -210,6 +246,7 @@ describe('simulcast-video-sync helpers', () => {
       const sendMessage = vi.fn();
       vi.stubGlobal('chrome', {
         runtime: {
+          id: 'test-extension-id',
           sendMessage,
           onMessage: { addListener: vi.fn() },
         },
@@ -234,6 +271,7 @@ describe('simulcast-video-sync helpers', () => {
         | undefined;
       vi.stubGlobal('chrome', {
         runtime: {
+          id: 'test-extension-id',
           sendMessage: vi.fn(),
           onMessage: {
             addListener: vi.fn((fn) => {
@@ -278,6 +316,7 @@ describe('simulcast-video-sync helpers', () => {
         | undefined;
       vi.stubGlobal('chrome', {
         runtime: {
+          id: 'test-extension-id',
           sendMessage: vi.fn(),
           onMessage: {
             addListener: vi.fn((fn) => {

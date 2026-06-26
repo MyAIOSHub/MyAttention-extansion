@@ -1,4 +1,5 @@
 import { normalizeSimulcastPlaybackDelayMs } from './simulcast-delay';
+import { MAX_STRICT_BUFFER_SEC } from '@/simulcast/video-sync-mode';
 
 export interface TranslatedAudioPlaybackEvent {
   event: 'playback-scheduled' | 'playback-started' | 'playback-ended';
@@ -39,7 +40,19 @@ export interface TranslatedAudioPlaybackQueueDependencies {
   setTimeout: (callback: () => void, delayMs: number) => number;
   clearTimeout: (timerId: number) => void;
   now: () => number;
+  /** performance.now() 域时钟：主时钟模式的 wall↔ctx 换算用它（与视频中继 capturedAtMs 同源）。 */
+  performanceNow: () => number;
   audioContext?: AudioContext | null;
+}
+
+/** 精准同步主时钟：把视频帧与译音锚到同一条「源墙钟 + 固定缓冲」时间线。 */
+export interface TranslatedAudioSourceTimeline {
+  /** 源 PTS=0 对应的 performance.now() 墙钟时刻（捕获起点）。 */
+  originWallMs: number;
+  /** 固定缓冲(ms)。 */
+  bufferMs: number;
+  /** 缓冲单向增长时回调（offscreen 内直接通知视频中继冻结/同步延迟）。参数为新的有效缓冲秒数。 */
+  onBufferGrow?: (effectiveBufferSec: number) => void;
 }
 
 function concatChunks(chunks: Uint8Array[]): Uint8Array {
@@ -121,6 +134,11 @@ export class TranslatedAudioPlaybackQueue {
   private pendingScheduledItems = 0;
   private generation = 0;
   private basePlaybackRate = DEFAULT_BASE_PLAYBACK_RATE;
+  // 主时钟模式状态（精准同步）：非 null 时按「源墙钟 + 固定缓冲」排程，与视频帧锁步。
+  private sourceTimelineOriginWallMs: number | null = null;
+  private baseBufferMs = 0;
+  private effectiveBufferMs = 0;
+  private onBufferGrow: ((effectiveBufferSec: number) => void) | null = null;
 
   constructor(dependencies: Partial<TranslatedAudioPlaybackQueueDependencies> = {}) {
     this.dependencies = {
@@ -132,9 +150,36 @@ export class TranslatedAudioPlaybackQueue {
         ((callback, delayMs) => window.setTimeout(callback, delayMs)),
       clearTimeout: dependencies.clearTimeout ?? ((timerId) => window.clearTimeout(timerId)),
       now: dependencies.now ?? (() => Date.now()),
+      performanceNow: dependencies.performanceNow ?? (() => performance.now()),
       audioContext: dependencies.audioContext ?? null,
     };
     this.audioContext = this.dependencies.audioContext ?? null;
+  }
+
+  /** 进入/退出精准同步主时钟模式。传 null 退出（回到首段相对锚定的旧模式）。 */
+  setSourceTimeline(timeline: TranslatedAudioSourceTimeline | null): void {
+    if (!timeline) {
+      this.sourceTimelineOriginWallMs = null;
+      this.baseBufferMs = 0;
+      this.effectiveBufferMs = 0;
+      this.onBufferGrow = null;
+      return;
+    }
+    this.sourceTimelineOriginWallMs = timeline.originWallMs;
+    this.baseBufferMs = Math.max(0, timeline.bufferMs);
+    this.effectiveBufferMs = this.baseBufferMs;
+    this.onBufferGrow = timeline.onBufferGrow ?? null;
+    // 切换主时钟后旧的相对锚作废，避免残留偏移。
+    this.timelineOriginContextTime = null;
+  }
+
+  /** 用户改缓冲滑块：重设基础/有效缓冲（清掉累计增长）。仅主时钟模式有意义。 */
+  setBufferSec(sec: number): void {
+    if (this.sourceTimelineOriginWallMs === null) {
+      return;
+    }
+    this.baseBufferMs = Math.max(0, sec * 1000);
+    this.effectiveBufferMs = this.baseBufferMs;
   }
 
   get size(): number {
@@ -157,6 +202,11 @@ export class TranslatedAudioPlaybackQueue {
     this.audioContext = audioContext;
     this.timelineOriginContextTime = null;
     this.lastScheduledEndContextTime = audioContext?.currentTime ?? 0;
+    // 主时钟由 setSourceTimeline 在设置 context 后单独建立；切换/清空 context 时先清掉，避免残留。
+    this.sourceTimelineOriginWallMs = null;
+    this.baseBufferMs = 0;
+    this.effectiveBufferMs = 0;
+    this.onBufferGrow = null;
   }
 
   waitUntilIdle(): Promise<void> {
@@ -210,6 +260,10 @@ export class TranslatedAudioPlaybackQueue {
     this.queue = [];
     this.pendingScheduledItems = 0;
     this.timelineOriginContextTime = null;
+    this.sourceTimelineOriginWallMs = null;
+    this.baseBufferMs = 0;
+    this.effectiveBufferMs = 0;
+    this.onBufferGrow = null;
     this.lastScheduledEndContextTime = this.audioContext?.currentTime ?? 0;
     if (this.startTimerId !== null) {
       this.dependencies.clearTimeout(this.startTimerId);
@@ -276,26 +330,60 @@ export class TranslatedAudioPlaybackQueue {
         ? item.sourceEndPts
         : sourceStartPts + (item.durationSec ?? decoded.duration);
 
-    if (this.timelineOriginContextTime === null) {
-      this.timelineOriginContextTime = audioContext.currentTime - sourceStartPts;
-      this.lastScheduledEndContextTime = Math.max(this.lastScheduledEndContextTime, audioContext.currentTime);
-    }
+    const masterMode =
+      this.sourceTimelineOriginWallMs !== null && typeof item.sourceStartPts === 'number';
 
-    const targetContextTime =
-      this.timelineOriginContextTime + sourceStartPts + normalizedDelayMs / 1000;
-    const scheduledAtContextTime = Math.max(
-      audioContext.currentTime,
-      targetContextTime,
-      this.lastScheduledEndContextTime
-    );
-    const queuedDurationBefore = Math.max(
-      0,
-      Math.round((this.lastScheduledEndContextTime - audioContext.currentTime) * 1000)
-    );
-    const playbackRate = computeAdaptivePlaybackRateForDuration(
-      queuedDurationBefore,
-      this.basePlaybackRate
-    );
+    let scheduledAtContextTime: number;
+    let playbackRate: number;
+    if (masterMode) {
+      // 主时钟：源 PTS p → 墙钟 origin + p*1000，再加固定缓冲，换算到 ctx 时间。
+      // 与视频帧 (capturedAtMs + buffer) 同一墙钟，故帧级锁步。
+      const targetWallMs =
+        this.sourceTimelineOriginWallMs! + sourceStartPts * 1000 + this.effectiveBufferMs;
+      const rawTargetContextTime = this.wallTimeMsToContextTime(audioContext, targetWallMs);
+      scheduledAtContextTime = Math.max(
+        audioContext.currentTime,
+        rawTargetContextTime,
+        this.lastScheduledEndContextTime
+      );
+      // 缺料/积压：被迫排到理想位置之后 → 缓冲单向增长，让视频帧同步冻结，保持锁步。
+      const shortfallSec = scheduledAtContextTime - rawTargetContextTime;
+      if (shortfallSec > 0) {
+        const grownMs = Math.min(
+          MAX_STRICT_BUFFER_SEC * 1000,
+          this.effectiveBufferMs + shortfallSec * 1000
+        );
+        if (grownMs > this.effectiveBufferMs) {
+          this.effectiveBufferMs = grownMs;
+          this.onBufferGrow?.(this.effectiveBufferMs / 1000);
+        }
+      }
+      // 主时钟模式固定基础倍速：积压加速会让译音跑到画面前面，破坏锁步（改由缓冲增长吸收）。
+      playbackRate = clampBasePlaybackRate(this.basePlaybackRate);
+    } else {
+      if (this.timelineOriginContextTime === null) {
+        this.timelineOriginContextTime = audioContext.currentTime - sourceStartPts;
+        this.lastScheduledEndContextTime = Math.max(
+          this.lastScheduledEndContextTime,
+          audioContext.currentTime
+        );
+      }
+      const targetContextTime =
+        this.timelineOriginContextTime + sourceStartPts + normalizedDelayMs / 1000;
+      scheduledAtContextTime = Math.max(
+        audioContext.currentTime,
+        targetContextTime,
+        this.lastScheduledEndContextTime
+      );
+      const queuedDurationBefore = Math.max(
+        0,
+        Math.round((this.lastScheduledEndContextTime - audioContext.currentTime) * 1000)
+      );
+      playbackRate = computeAdaptivePlaybackRateForDuration(
+        queuedDurationBefore,
+        this.basePlaybackRate
+      );
+    }
     const durationSec = decoded.duration / playbackRate;
     this.lastScheduledEndContextTime = scheduledAtContextTime + durationSec;
 
@@ -387,6 +475,20 @@ export class TranslatedAudioPlaybackQueue {
       }
     }
     return this.dependencies.now() + Math.max(0, (contextTime - audioContext.currentTime) * 1000);
+  }
+
+  /** contextTimeToWallTimeMs 的逆：把 performance.now() 墙钟时刻映射到 AudioContext 时间。 */
+  private wallTimeMsToContextTime(audioContext: AudioContext, wallMs: number): number {
+    if (typeof audioContext.getOutputTimestamp === 'function') {
+      const timestamp = audioContext.getOutputTimestamp();
+      if (
+        typeof timestamp.contextTime === 'number' &&
+        typeof timestamp.performanceTime === 'number'
+      ) {
+        return timestamp.contextTime + (wallMs - timestamp.performanceTime) / 1000;
+      }
+    }
+    return audioContext.currentTime + (wallMs - this.dependencies.performanceNow()) / 1000;
   }
 
   private scheduleNext(): void {

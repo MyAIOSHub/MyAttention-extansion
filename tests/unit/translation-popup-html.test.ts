@@ -4,6 +4,10 @@ import { describe, expect, it } from 'vitest';
 
 describe('translation popup shell', () => {
   const popupHtml = readFileSync(join(process.cwd(), 'public', 'html', 'popup.html'), 'utf8');
+  const fallbackPopupHtml = readFileSync(
+    join(process.cwd(), 'public', 'html', 'fallback_popup.html'),
+    'utf8'
+  );
 
   it('exposes a 翻译 tab with immersive / simultaneous sub-toggle', () => {
     const manifest = JSON.parse(readFileSync(join(process.cwd(), 'public', 'manifest.json'), 'utf8'));
@@ -30,5 +34,12 @@ describe('translation popup shell', () => {
     expect(popupHtml).toContain('id="simulcast-video-sync-mode"');
     expect(popupHtml).toContain('value="strict-delayed-player"');
     expect(popupHtml).toContain('id="simulcast-paired"');
+  });
+
+  it('keeps fallback popup scripts CSP-safe for MV3 extension pages', () => {
+    const inlineScriptTags = fallbackPopupHtml.match(/<script(?![^>]*\bsrc=)[^>]*>/gi) || [];
+
+    expect(inlineScriptTags).toEqual([]);
+    expect(fallbackPopupHtml).toContain('<script src="../fallback-popup.js"></script>');
   });
 });

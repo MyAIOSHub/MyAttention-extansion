@@ -127,4 +127,57 @@ describe('VolcengineAstSession', () => {
       expect(onAudioChunk).toHaveBeenCalledWith(new Uint8Array([9, 8]));
     });
   });
+
+  it('reports an unexpected websocket close after startup without reporting intentional close', async () => {
+    const socket = new FakeSocket();
+    const onClose = vi.fn();
+
+    const session = new VolcengineAstSession(
+      {
+        url: 'wss://openspeech.bytedance.com/api/v4/ast/v2/translate',
+        sessionId: 'session-1',
+        sourceLanguage: 'zh',
+        targetLanguage: 'en',
+        mode: 's2t',
+        voiceCloneEnabled: false,
+      },
+      {
+        createWebSocket: () => socket,
+        onClose,
+      }
+    );
+
+    await session.start();
+    socket.onopen?.();
+    socket.onmessage?.({ data: buildResponse(VOLCENGINE_AST_EVENTS.SessionStarted) });
+    await session.waitUntilStarted();
+
+    socket.onclose?.();
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(session.sendAudioChunk(new Uint8Array([1, 2, 3]))).toBe(false);
+
+    const secondSocket = new FakeSocket();
+    const intentionalClose = vi.fn();
+    const secondSession = new VolcengineAstSession(
+      {
+        url: 'wss://openspeech.bytedance.com/api/v4/ast/v2/translate',
+        sessionId: 'session-2',
+        sourceLanguage: 'zh',
+        targetLanguage: 'en',
+        mode: 's2t',
+        voiceCloneEnabled: false,
+      },
+      {
+        createWebSocket: () => secondSocket,
+        onClose: intentionalClose,
+      }
+    );
+    await secondSession.start();
+    secondSocket.onopen?.();
+    secondSocket.onmessage?.({ data: buildResponse(VOLCENGINE_AST_EVENTS.SessionStarted) });
+    await secondSession.waitUntilStarted();
+    secondSession.close();
+
+    expect(intentionalClose).not.toHaveBeenCalled();
+  });
 });

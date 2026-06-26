@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { EverMemOSClient } from '@/background/evermemos-client';
+import {
+  EverMemOSClient,
+  EverMemOSClientError,
+  isEverMemOSUnavailableError,
+} from '@/background/evermemos-client';
 
 function createAbortError(message = 'The operation was aborted.'): Error {
   const error = new Error(message);
@@ -53,6 +57,40 @@ describe('EverMemOSClient', () => {
       imported_conversations: 0,
       imported_snippets: 0,
     });
+  });
+
+  it('returns fallback browser sync status instead of throwing when server is offline', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new TypeError('Failed to fetch');
+      })
+    );
+
+    const client = new EverMemOSClient('http://127.0.0.1:1996');
+    const status = await client.getBrowserSyncStatus();
+
+    expect(status).toEqual({
+      running: false,
+      last_error: 'Failed to fetch',
+      pending_conversations: 0,
+      pending_snippets: 0,
+      in_progress_conversations: 0,
+      in_progress_snippets: 0,
+      imported_conversations: 0,
+      imported_snippets: 0,
+    });
+  });
+
+  it('classifies EverMemOS network failures as service-unavailable errors', () => {
+    expect(
+      isEverMemOSUnavailableError(new EverMemOSClientError('Failed to fetch', { code: 'network' }))
+    ).toBe(true);
+    expect(
+      isEverMemOSUnavailableError(
+        new EverMemOSClientError('EverMemOS request failed with status 500', { status: 500 })
+      )
+    ).toBe(false);
   });
 
   it('returns browser sync status payload on success', async () => {

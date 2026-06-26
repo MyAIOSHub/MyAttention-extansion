@@ -3,6 +3,7 @@
  * popup 通过 simulcast:subtitle 下发当前句；仅顶层页面渲染。
  * 定位锚到主视频底部居中，随滚动/全屏/缩放跟随。
  */
+import { isRuntimeContextAvailable } from '@/core/chrome-message';
 import { findMainVideo } from './simulcast-video-sync';
 
 let overlay: HTMLDivElement | null = null;
@@ -93,12 +94,17 @@ function setSubtitle(source: string, translation: string, mode: string): void {
   }
   const box = ensureOverlay();
   const showSrc = mode === 'bilingual' && !!src;
+  const showTr = mode !== 'originalOnly' && !!tr;
+  if (!showSrc && !showTr) {
+    hideOverlay();
+    return;
+  }
   if (srcRow) {
     srcRow.style.display = showSrc ? 'block' : 'none';
     srcRow.textContent = src;
   }
   if (trRow) {
-    trRow.style.display = tr ? 'block' : 'none';
+    trRow.style.display = showTr ? 'block' : 'none';
     trRow.textContent = tr;
   }
   box.style.display = 'block';
@@ -108,6 +114,9 @@ function setSubtitle(source: string, translation: string, mode: string): void {
 
 /** 注册 simulcast:subtitle 监听（仅顶层页面调用）。 */
 export function initSimulcastSubtitleOverlayListener(): void {
+  if (!isRuntimeContextAvailable()) {
+    return;
+  }
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (!message || message.type !== 'simulcast:subtitle') {
       return undefined;

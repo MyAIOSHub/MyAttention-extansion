@@ -11,6 +11,7 @@ import type {
 import {
   chromeMessageAdapter,
   isExtensionContextInvalidatedError,
+  isRuntimeContextAvailable,
 } from '@/core/chrome-message';
 import { Logger } from '@/core/errors';
 import { isAIConversationPage } from '@/core/page-scope';
@@ -280,7 +281,11 @@ export class SnippetCaptureController {
       subtree: true,
     });
 
-    chrome.runtime.onMessage.addListener(this.runtimeMessageListener);
+    if (isRuntimeContextAvailable()) {
+      chrome.runtime.onMessage.addListener(this.runtimeMessageListener);
+    } else {
+      Logger.debug('[SnippetCapture] 扩展上下文已失效，跳过上下文菜单消息监听');
+    }
   }
 
   stop(): void {
@@ -299,7 +304,9 @@ export class SnippetCaptureController {
       this.highlightReplayTimer = null;
     }
     this.highlightManager.clearAll();
-    chrome.runtime.onMessage.removeListener(this.runtimeMessageListener);
+    if (isRuntimeContextAvailable()) {
+      chrome.runtime.onMessage.removeListener(this.runtimeMessageListener);
+    }
     this.isStarted = false;
   }
 
@@ -318,7 +325,7 @@ export class SnippetCaptureController {
       await this.captureRange(range, 'auto_selection');
     } catch (error) {
       if (isRuntimeStale(error)) {
-        Logger.warn('[SnippetCapture] 自动划词保存跳过：扩展上下文已失效，等待页面刷新');
+        Logger.debug('[SnippetCapture] 自动划词保存跳过：扩展上下文已失效，等待页面刷新');
         return;
       }
       Logger.error('[SnippetCapture] 自动划词保存失败:', error);
@@ -567,7 +574,7 @@ export class SnippetCaptureController {
       Logger.info('[SnippetCapture] 已保存片段:', snippet.type, snippet.url);
     } catch (error) {
       if (isRuntimeStale(error)) {
-        Logger.warn('[SnippetCapture] 保存片段跳过：扩展上下文已失效');
+        Logger.debug('[SnippetCapture] 保存片段跳过：扩展上下文已失效');
         return;
       }
       const message = toErrorMessage(error);
@@ -604,7 +611,7 @@ export class SnippetCaptureController {
       Logger.info('[SnippetCapture] 已保存划词片段:', result.group.id, result.item.id);
     } catch (error) {
       if (isRuntimeStale(error)) {
-        Logger.warn('[SnippetCapture] 保存划词片段跳过：扩展上下文已失效');
+        Logger.debug('[SnippetCapture] 保存划词片段跳过：扩展上下文已失效');
         return;
       }
       const message = toErrorMessage(error);
@@ -642,7 +649,7 @@ export class SnippetCaptureController {
       replaySnippetHighlights(this.highlightManager, snippets);
     } catch (error) {
       if (isRuntimeStale(error)) {
-        Logger.warn('[SnippetCapture] 恢复高光跳过：扩展上下文已失效');
+        Logger.debug('[SnippetCapture] 恢复高光跳过：扩展上下文已失效');
         return;
       }
       Logger.error('[SnippetCapture] 恢复高光失败:', error);

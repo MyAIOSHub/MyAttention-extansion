@@ -15,6 +15,11 @@ function getOverlayElements(doc: Document): {
 }
 
 function setOverlayVisible(overlay: HTMLElement, visible: boolean): void {
+  const activeElement = overlay.ownerDocument.activeElement;
+  if (!visible && activeElement instanceof HTMLElement && overlay.contains(activeElement)) {
+    activeElement.blur();
+  }
+
   overlay.hidden = !visible;
   overlay.setAttribute('aria-hidden', visible ? 'false' : 'true');
 }

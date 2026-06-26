@@ -38,8 +38,12 @@ import {
   SimulcastRuntime,
   type StartSimulcastRequest,
 } from './simulcast-runtime';
+import type { StrictVideoCrop } from '@/offscreen/simulcast-video-relay';
 import { normalizeSimulcastPlaybackDelayMs } from '@/offscreen/simulcast-delay';
-import { normalizeSimulcastVideoSyncMode } from '@/simulcast/video-sync-mode';
+import {
+  normalizeSimulcastVideoSyncMode,
+  normalizeStrictBufferSec,
+} from '@/simulcast/video-sync-mode';
 import {
   TranslationIframeRuntime,
   type PageTranslationFrameRequest,
@@ -49,6 +53,7 @@ import {
   installVolcengineAstAuthRule,
   removeVolcengineAstAuthRule,
 } from './volcengine-ast-auth-rules';
+import { isEverMemOSUnavailableError } from './evermemos-client';
 
 // 后台异步初始化（设置 / Local Store 等）的就绪 Promise。
 // 事件监听器在顶层同步注册，但消息处理需等待初始化完成后再分发，
@@ -124,7 +129,7 @@ async function initializeLocalStore(): Promise<void> {
     await updateLocalStoreMeta({
       local_store_last_error: message,
     });
-    Logger.error('[Background] Local Store 健康检查失败:', message);
+    Logger.debug('[Background] Local Store 健康检查失败:', message);
     return;
   }
 
@@ -229,6 +234,71 @@ function broadcastRuntimeNotification(message: Record<string, unknown>): Promise
   });
 }
 
+const STRICT_PLAYER_POPUP_WIDTH = 640;
+const STRICT_PLAYER_POPUP_HEIGHT = 430;
+const STRICT_PLAYER_POPUP_MARGIN = 24;
+
+interface StrictPlayerPopupGeometry {
+  width: number;
+  height: number;
+  left?: number;
+  top?: number;
+}
+
+async function getStrictPlayerPopupGeometry(tabId: number): Promise<StrictPlayerPopupGeometry> {
+  const fallback = {
+    width: STRICT_PLAYER_POPUP_WIDTH,
+    height: STRICT_PLAYER_POPUP_HEIGHT,
+  };
+
+  try {
+    const tab = await new Promise<chrome.tabs.Tab>((resolve, reject) => {
+      chrome.tabs.get(tabId, (tabInfo) => {
+        const errorMessage = getChromeLastErrorMessage();
+        if (errorMessage) {
+          reject(new Error(errorMessage));
+          return;
+        }
+        resolve(tabInfo);
+      });
+    });
+    if (typeof tab.windowId !== 'number') {
+      return fallback;
+    }
+
+    const sourceWindow = await new Promise<chrome.windows.Window>((resolve, reject) => {
+      chrome.windows.get(tab.windowId!, (windowInfo) => {
+        const errorMessage = getChromeLastErrorMessage();
+        if (errorMessage) {
+          reject(new Error(errorMessage));
+          return;
+        }
+        resolve(windowInfo);
+      });
+    });
+
+    const sourceLeft = typeof sourceWindow.left === 'number' ? sourceWindow.left : undefined;
+    const sourceTop = typeof sourceWindow.top === 'number' ? sourceWindow.top : undefined;
+    const sourceWidth = typeof sourceWindow.width === 'number' ? sourceWindow.width : undefined;
+    if (
+      typeof sourceLeft !== 'number' ||
+      typeof sourceTop !== 'number' ||
+      typeof sourceWidth !== 'number'
+    ) {
+      return fallback;
+    }
+
+    return {
+      ...fallback,
+      left: Math.max(0, sourceLeft + sourceWidth - STRICT_PLAYER_POPUP_WIDTH - STRICT_PLAYER_POPUP_MARGIN),
+      top: Math.max(0, sourceTop + 72),
+    };
+  } catch (error) {
+    Logger.debug('[Background] 精准同步浮窗定位失败，使用默认位置', stringifyError(error));
+    return fallback;
+  }
+}
+
 const simulcastRuntime = new SimulcastRuntime({
   hasOffscreenDocument: () => chrome.offscreen.hasDocument(),
   createOffscreenDocument: (parameters) =>
@@ -245,30 +315,45 @@ const simulcastRuntime = new SimulcastRuntime({
   installAstAuthRule: (headers) =>
     installVolcengineAstAuthRule(chrome.declarativeNetRequest, headers),
   removeAstAuthRule: () => removeVolcengineAstAuthRule(chrome.declarativeNetRequest),
-  openStrictPlayerWindow: ({ sessionId, targetDelaySec }) =>
-    new Promise((resolve, reject) => {
+  openStrictPlayerWindow: async ({ tabId, sessionId, targetDelaySec }) => {
+    const geometry = await getStrictPlayerPopupGeometry(tabId);
+    return new Promise((resolve) => {
       const params = new URLSearchParams({
         sessionId,
         delay: String(targetDelaySec),
       });
-      chrome.windows.create(
-        {
-          url: chrome.runtime.getURL(`${SIMULCAST_STRICT_PLAYER_PATH}?${params.toString()}`),
-          type: 'popup',
-          width: 960,
-          height: 540,
-          focused: true,
-        },
-        (windowInfo) => {
-          const errorMessage = getChromeLastErrorMessage();
-          if (errorMessage) {
-            reject(new Error(errorMessage));
-            return;
+      const url = chrome.runtime.getURL(`${SIMULCAST_STRICT_PLAYER_PATH}?${params.toString()}`);
+      Logger.info('[Background] 精准同步：尝试打开浮窗播放器', {
+        url,
+        targetDelaySec,
+        geometry,
+      });
+      // 开窗失败不拖垮整个同传：记录原因并以 undefined 继续（捕获/译音照常）。
+      try {
+        chrome.windows.create(
+          {
+            url,
+            type: 'popup',
+            ...geometry,
+            focused: true,
+          },
+          (windowInfo) => {
+            const errorMessage = getChromeLastErrorMessage();
+            if (errorMessage) {
+              Logger.warn('[Background] 精准同步开窗失败', errorMessage);
+              resolve(undefined);
+              return;
+            }
+            Logger.info('[Background] 精准同步播放器已开窗', { windowId: windowInfo?.id });
+            resolve(windowInfo?.id);
           }
-          resolve(windowInfo?.id);
-        }
-      );
-    }),
+        );
+      } catch (error) {
+        Logger.warn('[Background] 精准同步开窗异常', stringifyError(error));
+        resolve(undefined);
+      }
+    });
+  },
   closeStrictPlayerWindow: (windowId) =>
     new Promise((resolve) => {
       chrome.windows.remove(windowId, () => {
@@ -345,6 +430,31 @@ function getRecordParam(value: unknown): RuntimeMessageParams {
   return typeof value === 'object' && value !== null ? (value as RuntimeMessageParams) : {};
 }
 
+function getStrictVideoCropParam(value: unknown): StrictVideoCrop | undefined {
+  const record = getRecordParam(value);
+  const values = [
+    record.left,
+    record.top,
+    record.width,
+    record.height,
+    record.viewportWidth,
+    record.viewportHeight,
+  ];
+  if (!values.every((item) => typeof item === 'number' && Number.isFinite(item))) {
+    return undefined;
+  }
+  const [left, top, width, height, viewportWidth, viewportHeight] = values as number[];
+  if (
+    width <= 1 ||
+    height <= 1 ||
+    viewportWidth <= 1 ||
+    viewportHeight <= 1
+  ) {
+    return undefined;
+  }
+  return { left, top, width, height, viewportWidth, viewportHeight };
+}
+
 function buildStartSimulcastRequest(params: RuntimeMessageParams): StartSimulcastRequest {
   if (typeof params.tabId !== 'number') {
     throw new Error('启动同声传译需要当前标签页 ID');
@@ -373,7 +483,7 @@ function buildStartSimulcastRequest(params: RuntimeMessageParams): StartSimulcas
       params.audioOutputMode,
       'translatedOnly'
     ) as StartSimulcastRequest['audioOutputMode'],
-    originalVolume: normalizeVolume(params.originalVolume, 0.25),
+    originalVolume: normalizeVolume(params.originalVolume, 0),
     translatedVolume: normalizeVolume(params.translatedVolume, 1),
     translatedAudioDelayMs: normalizeSimulcastPlaybackDelayMs(params.translatedAudioDelayMs),
     translatedMaxPlaybackRate:
@@ -381,6 +491,8 @@ function buildStartSimulcastRequest(params: RuntimeMessageParams): StartSimulcas
         ? params.translatedMaxPlaybackRate
         : undefined,
     videoSyncMode: normalizeSimulcastVideoSyncMode(params.videoSyncMode),
+    videoViewportRect: getStrictVideoCropParam(params.videoViewportRect),
+    strictPlayerBufferSec: normalizeStrictBufferSec(params.strictPlayerBufferSec),
     subtitleDisplayMode: getStringParam(
       params.subtitleDisplayMode,
       'bilingual'
@@ -747,7 +859,12 @@ const messageHandlersMap: Record<
   },
 
   'simulcast:start': async (params) => {
-    const simulcast = await simulcastRuntime.start(buildStartSimulcastRequest(params));
+    const request = buildStartSimulcastRequest(params);
+    Logger.info('[Background] simulcast:start', {
+      videoSyncMode: request.videoSyncMode,
+      strictPlayerBufferSec: request.strictPlayerBufferSec,
+    });
+    const simulcast = await simulcastRuntime.start(request);
     return { simulcast };
   },
 
@@ -808,7 +925,7 @@ const messageHandlersMap: Record<
 
     const simulcast = await simulcastRuntime.updatePlaybackSettings({
       tabId,
-      originalVolume: normalizeVolume(params.originalVolume, 0.25),
+      originalVolume: normalizeVolume(params.originalVolume, 0),
       translatedVolume: normalizeVolume(params.translatedVolume, 1),
       translatedAudioDelayMs: normalizeSimulcastPlaybackDelayMs(params.translatedAudioDelayMs),
       translatedMaxPlaybackRate:
@@ -836,10 +953,7 @@ const messageHandlersMap: Record<
       return { status: 'ok', updated: false, simulcast: current };
     }
 
-    const targetDelaySec =
-      typeof params.targetDelaySec === 'number' && Number.isFinite(params.targetDelaySec)
-        ? Math.min(8, Math.max(1, params.targetDelaySec))
-        : 1;
+    const targetDelaySec = normalizeStrictBufferSec(params.targetDelaySec);
     const simulcast = await simulcastRuntime.updateStrictPlayerDelay({
       tabId,
       targetDelaySec,
@@ -854,6 +968,12 @@ const messageHandlersMap: Record<
       status: params.status,
       translatedAudio: params.translatedAudio,
     });
+    if (params.strictVideo) {
+      Logger.info('[Background] 精准同步视频中继状态', {
+        strictVideo: params.strictVideo,
+        videoTrackCount: params.strictVideoTrackCount,
+      });
+    }
     await broadcastRuntimeNotification({
       type: 'simulcast:popupUpdate',
       tabId: params.tabId,
@@ -861,6 +981,7 @@ const messageHandlersMap: Record<
       status: params.status,
       translatedAudio: params.translatedAudio,
       audio: params.audio, // 转写录音回放（停止时一次性下发）
+      strictVideo: params.strictVideo, // 严格中继成败 → popup 决定是否回退页面对齐
     });
     return { status: 'ok' };
   },
@@ -1139,6 +1260,18 @@ function normalizeMessageResponse(result: any): any {
   };
 }
 
+function logBackgroundMessageError(messageType: string, error: unknown): void {
+  if (isEverMemOSUnavailableError(error)) {
+    Logger.debug('[Background] EverMemOS 服务不可用，消息处理返回错误:', {
+      type: messageType,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return;
+  }
+
+  Logger.error('[Background] 处理消息失败:', error);
+}
+
 // ============================================================================
 // 消息监听器
 // ============================================================================
@@ -1193,7 +1326,7 @@ function setupMessageListeners(): void {
           sendResponse(normalizeMessageResponse(result));
         })
         .catch((error) => {
-          Logger.error('[Background] 处理消息失败:', error);
+          logBackgroundMessageError(message.type, error);
           sendResponse({
             status: 'error',
             error: error instanceof Error ? error.message : String(error),

@@ -99,8 +99,8 @@ export abstract class BasePlatformAdapter {
     }
 
     // 监听设置更新
-    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-      if (message.type === 'settingsUpdated' && message.settings) {
+    chromeMessageAdapter.onMessage('settingsUpdated', (message, sender, sendResponse) => {
+      if (message.settings) {
         this.settings = {
           ...this.settings,
           ...message.settings,

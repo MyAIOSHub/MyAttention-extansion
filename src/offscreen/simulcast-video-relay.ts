@@ -1,4 +1,8 @@
-import { getSimulcastStrictPlayerChannel } from '@/simulcast/video-sync-mode';
+import {
+  getSimulcastStrictPlayerChannel,
+  MAX_STRICT_BUFFER_SEC,
+  MIN_STRICT_BUFFER_SEC,
+} from '@/simulcast/video-sync-mode';
 
 export type StrictDelayedVideoRelayMessage =
   | {
@@ -17,6 +21,17 @@ export type StrictDelayedVideoRelayMessage =
       displayAtMs: number;
       targetDelaySec: number;
       frameCount: number;
+    }
+  | {
+      type: 'subtitle';
+      source?: string;
+      translation?: string;
+      channel?: 'source' | 'translation';
+      text?: string;
+      event?: number;
+      reset?: boolean;
+      mode: string;
+      clear?: boolean;
     };
 
 type VideoFrameCallbackMetadata = {
@@ -38,18 +53,32 @@ interface PendingVideoFrame {
   width: number;
   height: number;
   capturedAtMs: number;
-  displayAtMs: number;
   frameCount: number;
+}
+
+export interface StrictVideoCrop {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  viewportWidth: number;
+  viewportHeight: number;
 }
 
 interface StrictDelayedVideoRelayOptions {
   sessionId: string;
   targetDelaySec: number;
+  videoViewportRect?: StrictVideoCrop;
   now?: () => number;
 }
 
 const DEFAULT_FRAME_INTERVAL_MS = 1000 / 24;
-const MAX_PENDING_FRAMES = 240;
+const FIRST_FRAME_TIMEOUT_MS = 2500;
+// 待发帧上限按当前缓冲动态算（缓冲增大时不能静默丢有效帧 → 否则永久失步），并设安全硬顶。
+const ABSOLUTE_MAX_PENDING_FRAMES = 900;
+function maxPendingFramesFor(targetDelaySec: number): number {
+  return Math.min(ABSOLUTE_MAX_PENDING_FRAMES, Math.ceil((targetDelaySec + 1) * 60));
+}
 
 export class StrictDelayedVideoRelay {
   private readonly channel: BroadcastChannel;
@@ -59,16 +88,20 @@ export class StrictDelayedVideoRelay {
   private frameTimerId: number | null = null;
   private flushTimerId: number | null = null;
   private frameCallbackId: number | null = null;
+  private firstFrameTimeoutId: number | null = null;
+  private resolveFirstFrame: ((captured: boolean) => void) | null = null;
   private stopped = true;
   private lastCapturedAtMs = 0;
   private frameCount = 0;
   private targetDelaySec: number;
+  private readonly videoViewportRect?: StrictVideoCrop;
 
   constructor(options: StrictDelayedVideoRelayOptions) {
     this.channel = new BroadcastChannel(
       getSimulcastStrictPlayerChannel(options.sessionId)
     );
     this.targetDelaySec = normalizeRelayDelaySec(options.targetDelaySec);
+    this.videoViewportRect = normalizeCrop(options.videoViewportRect);
     this.now = options.now ?? (() => performance.now());
   }
 
@@ -102,6 +135,13 @@ export class StrictDelayedVideoRelay {
     }
 
     this.scheduleNextFrame();
+    const capturedFirstFrame = await this.waitForFirstFrame();
+    if (!capturedFirstFrame) {
+      this.postStatus('unsupported', '无法捕获标签页视频帧。');
+      this.stop();
+      return false;
+    }
+
     return true;
   }
 
@@ -122,6 +162,12 @@ export class StrictDelayedVideoRelay {
       clearTimeout(this.flushTimerId);
       this.flushTimerId = null;
     }
+    if (this.firstFrameTimeoutId !== null) {
+      clearTimeout(this.firstFrameTimeoutId);
+      this.firstFrameTimeoutId = null;
+    }
+    this.resolveFirstFrame?.(false);
+    this.resolveFirstFrame = null;
     const video = this.video;
     if (video && this.frameCallbackId !== null && video.cancelVideoFrameCallback) {
       video.cancelVideoFrameCallback(this.frameCallbackId);
@@ -145,15 +191,10 @@ export class StrictDelayedVideoRelay {
     if (this.stopped || !this.video) {
       return;
     }
-    const video = this.video;
-    if (video.requestVideoFrameCallback) {
-      this.frameCallbackId = video.requestVideoFrameCallback(() => {
-        void this.captureFrame().finally(() => this.scheduleNextFrame());
-      });
-      return;
-    }
-
+    // Offscreen documents do not reliably fire requestVideoFrameCallback for tabCapture
+    // streams in every Chrome state. A fixed sampler keeps the relay from staying black.
     this.frameTimerId = window.setTimeout(() => {
+      this.frameTimerId = null;
       void this.captureFrame().finally(() => this.scheduleNextFrame());
     }, DEFAULT_FRAME_INTERVAL_MS);
   }
@@ -174,26 +215,66 @@ export class StrictDelayedVideoRelay {
       return;
     }
 
+    const sourceRect = resolveSourceRect(
+      width,
+      height,
+      this.videoViewportRect
+    );
+
     this.lastCapturedAtMs = capturedAtMs;
-    const bitmap = await createImageBitmap(video);
+    const bitmap = sourceRect
+      ? await createImageBitmap(
+          video,
+          sourceRect.sx,
+          sourceRect.sy,
+          sourceRect.sw,
+          sourceRect.sh
+        )
+      : await createImageBitmap(video);
     this.frameCount += 1;
     this.pendingFrames.push({
       bitmap,
-      width,
-      height,
+      width: sourceRect?.sw ?? width,
+      height: sourceRect?.sh ?? height,
       capturedAtMs,
-      displayAtMs: capturedAtMs + this.targetDelaySec * 1000,
       frameCount: this.frameCount,
     });
     this.trimPendingFrames();
     this.scheduleFlush();
     if (this.frameCount === 1) {
+      this.resolveFirstFrame?.(true);
+      this.resolveFirstFrame = null;
+      if (this.firstFrameTimeoutId !== null) {
+        clearTimeout(this.firstFrameTimeoutId);
+        this.firstFrameTimeoutId = null;
+      }
       this.postStatus('playing', '精准同步播放器已接收首帧。');
     }
   }
 
+  private waitForFirstFrame(): Promise<boolean> {
+    if (this.frameCount > 0) {
+      return Promise.resolve(true);
+    }
+
+    return new Promise((resolve) => {
+      this.resolveFirstFrame = resolve;
+      this.firstFrameTimeoutId = window.setTimeout(() => {
+        this.firstFrameTimeoutId = null;
+        this.resolveFirstFrame = null;
+        resolve(false);
+      }, FIRST_FRAME_TIMEOUT_MS);
+    });
+  }
+
+  /** 帧投递时刻按「当前」targetDelaySec 实时计算：缓冲调大即把待发帧整体推后（=冻结），只增不减。 */
+  private displayAtMs(frame: PendingVideoFrame): number {
+    return frame.capturedAtMs + this.targetDelaySec * 1000;
+  }
+
   private trimPendingFrames(): void {
-    while (this.pendingFrames.length > MAX_PENDING_FRAMES) {
+    const max = maxPendingFramesFor(this.targetDelaySec);
+    while (this.pendingFrames.length > max) {
       this.pendingFrames.shift()?.bitmap.close();
     }
   }
@@ -210,7 +291,7 @@ export class StrictDelayedVideoRelay {
     if (!nextFrame) {
       return;
     }
-    const delayMs = Math.max(0, nextFrame.displayAtMs - this.now());
+    const delayMs = Math.max(0, this.displayAtMs(nextFrame) - this.now());
     this.flushTimerId = window.setTimeout(() => this.flushReadyFrames(), delayMs);
   }
 
@@ -219,7 +300,7 @@ export class StrictDelayedVideoRelay {
       return;
     }
     const now = this.now();
-    while (this.pendingFrames.length > 0 && this.pendingFrames[0].displayAtMs <= now) {
+    while (this.pendingFrames.length > 0 && this.displayAtMs(this.pendingFrames[0]) <= now) {
       const frame = this.pendingFrames.shift()!;
       try {
         this.channel.postMessage({
@@ -228,7 +309,7 @@ export class StrictDelayedVideoRelay {
           width: frame.width,
           height: frame.height,
           capturedAtMs: frame.capturedAtMs,
-          displayAtMs: frame.displayAtMs,
+          displayAtMs: this.displayAtMs(frame),
           targetDelaySec: this.targetDelaySec,
           frameCount: frame.frameCount,
         } satisfies StrictDelayedVideoRelayMessage);
@@ -255,7 +336,59 @@ export class StrictDelayedVideoRelay {
 
 function normalizeRelayDelaySec(value: number): number {
   if (!Number.isFinite(value)) {
-    return 1;
+    return MIN_STRICT_BUFFER_SEC;
   }
-  return Math.min(8, Math.max(1, value));
+  return Math.min(MAX_STRICT_BUFFER_SEC, Math.max(MIN_STRICT_BUFFER_SEC, value));
+}
+
+function normalizeCrop(crop: StrictVideoCrop | undefined): StrictVideoCrop | undefined {
+  if (!crop) {
+    return undefined;
+  }
+
+  const values = [
+    crop.left,
+    crop.top,
+    crop.width,
+    crop.height,
+    crop.viewportWidth,
+    crop.viewportHeight,
+  ];
+  if (!values.every((value) => Number.isFinite(value))) {
+    return undefined;
+  }
+  if (crop.width <= 1 || crop.height <= 1 || crop.viewportWidth <= 1 || crop.viewportHeight <= 1) {
+    return undefined;
+  }
+
+  return crop;
+}
+
+function resolveSourceRect(
+  sourceWidth: number,
+  sourceHeight: number,
+  crop: StrictVideoCrop | undefined
+): { sx: number; sy: number; sw: number; sh: number } | null {
+  if (!crop) {
+    return null;
+  }
+
+  const scaleX = sourceWidth / crop.viewportWidth;
+  const scaleY = sourceHeight / crop.viewportHeight;
+  const sx = clampInt(Math.round(crop.left * scaleX), 0, sourceWidth - 1);
+  const sy = clampInt(Math.round(crop.top * scaleY), 0, sourceHeight - 1);
+  const right = clampInt(Math.round((crop.left + crop.width) * scaleX), sx + 1, sourceWidth);
+  const bottom = clampInt(Math.round((crop.top + crop.height) * scaleY), sy + 1, sourceHeight);
+  const sw = right - sx;
+  const sh = bottom - sy;
+
+  if (sw <= 1 || sh <= 1) {
+    return null;
+  }
+
+  return { sx, sy, sw, sh };
+}
+
+function clampInt(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
 }

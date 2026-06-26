@@ -26,8 +26,9 @@ function installChromeStorageMock(pending: boolean) {
 describe('first open overlay', () => {
   beforeEach(() => {
     document.body.innerHTML = `
-      <div id="first-open-overlay" hidden aria-hidden="true"></div>
-      <button id="first-open-overlay-close" type="button">x</button>
+      <div id="first-open-overlay" hidden aria-hidden="true">
+        <button id="first-open-overlay-close" type="button">x</button>
+      </div>
     `;
   });
 
@@ -54,9 +55,11 @@ describe('first open overlay', () => {
 
     const overlay = document.getElementById('first-open-overlay') as HTMLElement;
     const closeButton = document.getElementById('first-open-overlay-close') as HTMLButtonElement;
+    closeButton.focus();
     closeButton.click();
 
     expect(overlay.hidden).toBe(true);
+    expect(document.activeElement).not.toBe(closeButton);
     expect(local.set).toHaveBeenCalledWith(
       { [FIRST_OPEN_WELCOME_PENDING_KEY]: false },
       expect.any(Function)

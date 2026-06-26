@@ -53,6 +53,8 @@ export interface VolcengineAstSessionDependencies {
   onEvent?: (response: AstResponseFrame) => void;
   /** 会话启动后发生的帧解析/处理错误（单帧失败，不终止会话） */
   onError?: (error: Error) => void;
+  /** 会话启动后 WebSocket 关闭。 */
+  onClose?: () => void;
 }
 
 const WEBSOCKET_OPEN_STATE = 1;
@@ -83,6 +85,7 @@ export class VolcengineAstSession {
   private startReject: ((error: Error) => void) | null = null;
   private startResolve: (() => void) | null = null;
   private readonly startedPromise: Promise<void>;
+  private closingIntentionally = false;
 
   constructor(
     private readonly config: VolcengineAstSessionConfig,
@@ -133,12 +136,18 @@ export class VolcengineAstSession {
       });
     };
     socket.onerror = (): void => {
-      this.settleStart(new Error('火山 AST WebSocket 连接失败'));
+      this.handleSessionError(new Error('火山 AST WebSocket 连接失败'));
     };
     socket.onclose = (): void => {
+      if (this.closingIntentionally) {
+        return;
+      }
       if (!this.started) {
         this.settleStart(new Error('火山 AST WebSocket 在会话启动前关闭'));
+        return;
       }
+      this.started = false;
+      this.dependencies.onClose?.();
     };
     this.socket = socket;
   }
@@ -173,9 +182,13 @@ export class VolcengineAstSession {
     return this.lastAudioChunkTiming ? { ...this.lastAudioChunkTiming } : null;
   }
 
-  sendAudioChunk(chunk: Uint8Array, timing?: AstAudioChunkTiming): void {
+  isOpen(): boolean {
+    return this.started && !!this.socket && this.socket.readyState === WEBSOCKET_OPEN_STATE;
+  }
+
+  sendAudioChunk(chunk: Uint8Array, timing?: AstAudioChunkTiming): boolean {
     if (!this.started || !this.socket || this.socket.readyState !== WEBSOCKET_OPEN_STATE) {
-      return;
+      return false;
     }
 
     this.sequence += 1;
@@ -188,6 +201,7 @@ export class VolcengineAstSession {
         sendAtMs: performance.now(),
       };
     this.socket.send(buildAstTaskRequestFrame(this.config.sessionId, chunk, this.sequence));
+    return true;
   }
 
   finish(): void {
@@ -199,9 +213,12 @@ export class VolcengineAstSession {
   }
 
   close(): void {
-    this.socket?.close();
+    const socket = this.socket;
     this.socket = null;
     this.started = false;
+    this.closingIntentionally = true;
+    socket?.close();
+    this.closingIntentionally = false;
   }
 
   private async handleMessage(data: ArrayBuffer | Blob): Promise<void> {
@@ -226,7 +243,13 @@ export class VolcengineAstSession {
       response.event === VOLCENGINE_AST_EVENTS.SessionFailed ||
       response.event === VOLCENGINE_AST_EVENTS.SessionCanceled
     ) {
-      this.settleStart(new Error(response.message || '火山 AST 会话失败'));
+      this.handleSessionError(new Error(response.message || '火山 AST 会话失败'));
+      return;
+    }
+
+    if (response.event === VOLCENGINE_AST_EVENTS.SessionFinished) {
+      this.started = false;
+      this.dependencies.onClose?.();
       return;
     }
 

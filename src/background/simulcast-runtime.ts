@@ -7,8 +7,10 @@ import {
   VOLCENGINE_AST_WS_URL,
   buildVolcengineAstHeaders,
 } from '@/translation/volcengine-ast';
+import type { StrictVideoCrop } from '@/offscreen/simulcast-video-relay';
 import {
   normalizeSimulcastVideoSyncMode,
+  normalizeStrictBufferSec,
   type SimulcastVideoSyncMode,
 } from '@/simulcast/video-sync-mode';
 
@@ -37,6 +39,9 @@ export interface StartSimulcastRequest {
   translatedAudioDelayMs: number;
   translatedMaxPlaybackRate?: number;
   videoSyncMode?: SimulcastVideoSyncMode;
+  videoViewportRect?: StrictVideoCrop;
+  /** 精准同步固定缓冲（秒），strict 模式下视频/译音共用的主时钟缓冲。 */
+  strictPlayerBufferSec?: number;
   subtitleDisplayMode: SubtitleDisplayMode;
   voiceCloneEnabled: boolean;
   credentials: SimultaneousInterpretationConfig['credentials'];
@@ -62,6 +67,7 @@ export interface SimulcastRuntimeStatus {
   sourceLanguage?: string;
   targetLanguage?: string;
   videoSyncMode?: SimulcastVideoSyncMode;
+  strictVideo?: 'active' | 'unavailable';
   strictPlayerSessionId?: string;
   strictPlayerWindowId?: number;
 }
@@ -79,12 +85,17 @@ export interface SimulcastRuntimeDependencies {
   installAstAuthRule: (headers: Record<string, string>) => Promise<void>;
   removeAstAuthRule: () => Promise<void>;
   openStrictPlayerWindow?: (parameters: {
+    tabId: number;
     sessionId: string;
     targetDelaySec: number;
   }) => Promise<number | undefined>;
   closeStrictPlayerWindow?: (windowId: number) => Promise<void>;
   now: () => string;
   wait: (delayMs: number) => Promise<void>;
+}
+
+interface OffscreenStartResult {
+  strictVideo?: 'active' | 'unavailable';
 }
 
 export class SimulcastRuntime {
@@ -101,17 +112,13 @@ export class SimulcastRuntime {
     const videoSyncMode = normalizeSimulcastVideoSyncMode(request.videoSyncMode);
     const strictPlayerSessionId =
       videoSyncMode === 'strict-delayed-player' ? createRuntimeId() : undefined;
-    let strictPlayerWindowId: number | undefined;
+    const strictBufferSec = normalizeStrictBufferSec(request.strictPlayerBufferSec);
+    await this.stopExistingSessionBeforeStart(request.tabId);
     await this.dependencies.installAstAuthRule(headers);
+    let strictPlayerWindowId: number | undefined;
+    let offscreenStart: OffscreenStartResult = {};
 
     try {
-      if (strictPlayerSessionId && this.dependencies.openStrictPlayerWindow) {
-        strictPlayerWindowId = await this.dependencies.openStrictPlayerWindow({
-          sessionId: strictPlayerSessionId,
-          targetDelaySec: 1,
-        });
-      }
-
       await this.ensureOffscreenDocument();
       // 麦克风/文件/链接来源无需 tab 媒体流 ID
       const needsTabStream = (request.audioSource ?? 'tab') === 'tab';
@@ -119,7 +126,7 @@ export class SimulcastRuntime {
         ? request.streamId || (await this.dependencies.getTabMediaStreamId(request.tabId))
         : '';
 
-      await this.sendOffscreenStartMessage({
+      offscreenStart = await this.sendOffscreenStartMessage({
         type: 'simulcast:offscreenStart',
         session: {
           tabId: request.tabId,
@@ -138,8 +145,9 @@ export class SimulcastRuntime {
           translatedAudioDelayMs: request.translatedAudioDelayMs,
           translatedMaxPlaybackRate: request.translatedMaxPlaybackRate,
           videoSyncMode,
+          videoViewportRect: request.videoViewportRect,
           strictPlayerSessionId,
-          strictPlayerTargetDelaySec: strictPlayerSessionId ? 1 : undefined,
+          strictPlayerTargetDelaySec: strictPlayerSessionId ? strictBufferSec : undefined,
           subtitleDisplayMode: request.subtitleDisplayMode,
           voiceCloneEnabled: request.voiceCloneEnabled,
           ast: {
@@ -148,6 +156,18 @@ export class SimulcastRuntime {
           },
         },
       });
+
+      if (
+        strictPlayerSessionId &&
+        this.dependencies.openStrictPlayerWindow &&
+        offscreenStart.strictVideo !== 'unavailable'
+      ) {
+        strictPlayerWindowId = await this.dependencies.openStrictPlayerWindow({
+          tabId: request.tabId,
+          sessionId: strictPlayerSessionId,
+          targetDelaySec: strictBufferSec,
+        });
+      }
     } catch (error) {
       if (
         typeof strictPlayerWindowId === 'number' &&
@@ -169,6 +189,7 @@ export class SimulcastRuntime {
       sourceLanguage: request.sourceLanguage,
       targetLanguage: request.targetLanguage,
       videoSyncMode,
+      strictVideo: offscreenStart.strictVideo,
       strictPlayerSessionId,
       strictPlayerWindowId,
     };
@@ -241,6 +262,28 @@ export class SimulcastRuntime {
     return this.getStatus();
   }
 
+  private async stopExistingSessionBeforeStart(tabId: number): Promise<void> {
+    if (this.status.state === 'capturing') {
+      await this.stop();
+      return;
+    }
+
+    const hasDocument = await this.dependencies.hasOffscreenDocument().catch(() => false);
+    if (!hasDocument) {
+      return;
+    }
+
+    await this.dependencies
+      .sendRuntimeMessage({
+        type: 'simulcast:offscreenStop',
+        tabId,
+      })
+      .catch(() => undefined);
+    await this.dependencies.closeOffscreenDocument().catch(() => undefined);
+    await this.dependencies.removeAstAuthRule().catch(() => undefined);
+    this.status = { state: 'stopped' };
+  }
+
   private async ensureOffscreenDocument(): Promise<void> {
     const hasDocument = await this.dependencies.hasOffscreenDocument();
     if (hasDocument) {
@@ -254,12 +297,14 @@ export class SimulcastRuntime {
     });
   }
 
-  private async sendOffscreenStartMessage(message: Record<string, unknown>): Promise<void> {
+  private async sendOffscreenStartMessage(
+    message: Record<string, unknown>
+  ): Promise<OffscreenStartResult> {
     const maxAttempts = 5;
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       try {
-        await this.dependencies.sendRuntimeMessage(message);
-        return;
+        const response = await this.dependencies.sendRuntimeMessage(message);
+        return normalizeOffscreenStartResult(response);
       } catch (error) {
         if (attempt === maxAttempts || !isOffscreenReceiverNotReady(error)) {
           throw error;
@@ -267,7 +312,19 @@ export class SimulcastRuntime {
         await this.dependencies.wait(100);
       }
     }
+    return {};
   }
+}
+
+function normalizeOffscreenStartResult(response: unknown): OffscreenStartResult {
+  if (!response || typeof response !== 'object') {
+    return {};
+  }
+  const strictVideo = (response as { strictVideo?: unknown }).strictVideo;
+  if (strictVideo === 'active' || strictVideo === 'unavailable') {
+    return { strictVideo };
+  }
+  return {};
 }
 
 function createRuntimeId(): string {

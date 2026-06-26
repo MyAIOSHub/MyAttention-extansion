@@ -35,6 +35,7 @@ const baseRequest = {
   originalVolume: 0.25,
   translatedVolume: 0.9,
   translatedAudioDelayMs: 1200,
+  videoSyncMode: 'fallback-page-video' as const,
   subtitleDisplayMode: 'bilingual' as const,
   voiceCloneEnabled: true,
   credentials: {
@@ -99,21 +100,36 @@ describe('SimulcastRuntime', () => {
     const closeStrictPlayerWindow = vi.fn().mockResolvedValue(undefined);
     const { dependencies, runtime } = createRuntime({
       openStrictPlayerWindow: vi.fn().mockResolvedValue(99),
+      sendRuntimeMessage: vi.fn().mockResolvedValue({ status: 'ok', strictVideo: 'active' }),
       closeStrictPlayerWindow,
     });
 
     const result = await runtime.start({
       ...baseRequest,
       videoSyncMode: 'strict-delayed-player',
+      strictPlayerBufferSec: 5,
+      videoViewportRect: {
+        left: 10,
+        top: 20,
+        width: 640,
+        height: 360,
+        viewportWidth: 1280,
+        viewportHeight: 720,
+      },
     });
 
     expect(dependencies.openStrictPlayerWindow).toHaveBeenCalledWith({
+      tabId: 42,
       sessionId: expect.any(String),
-      targetDelaySec: 1,
+      targetDelaySec: 5,
     });
+    expect(
+      vi.mocked(dependencies.openStrictPlayerWindow).mock.invocationCallOrder[0]
+    ).toBeGreaterThan(vi.mocked(dependencies.sendRuntimeMessage).mock.invocationCallOrder[0]);
     expect(result).toMatchObject({
       state: 'capturing',
       videoSyncMode: 'strict-delayed-player',
+      strictVideo: 'active',
       strictPlayerSessionId: expect.any(String),
       strictPlayerWindowId: 99,
     });
@@ -121,8 +137,16 @@ describe('SimulcastRuntime', () => {
       type: 'simulcast:offscreenStart',
       session: expect.objectContaining({
         videoSyncMode: 'strict-delayed-player',
+        videoViewportRect: {
+          left: 10,
+          top: 20,
+          width: 640,
+          height: 360,
+          viewportWidth: 1280,
+          viewportHeight: 720,
+        },
         strictPlayerSessionId: result.strictPlayerSessionId,
-        strictPlayerTargetDelaySec: 1,
+        strictPlayerTargetDelaySec: 5,
       }),
     });
 
@@ -137,6 +161,28 @@ describe('SimulcastRuntime', () => {
     await runtime.stop();
 
     expect(closeStrictPlayerWindow).toHaveBeenCalledWith(99);
+  });
+
+  it('does not flash open the strict player when the offscreen video relay is unavailable', async () => {
+    const { dependencies, runtime } = createRuntime({
+      openStrictPlayerWindow: vi.fn().mockResolvedValue(99),
+      sendRuntimeMessage: vi.fn().mockResolvedValue({ status: 'ok', strictVideo: 'unavailable' }),
+    });
+
+    const result = await runtime.start({
+      ...baseRequest,
+      videoSyncMode: 'strict-delayed-player',
+      strictPlayerBufferSec: 5,
+    });
+
+    expect(result).toMatchObject({
+      state: 'capturing',
+      videoSyncMode: 'strict-delayed-player',
+      strictVideo: 'unavailable',
+      strictPlayerSessionId: expect.any(String),
+    });
+    expect(result.strictPlayerWindowId).toBeUndefined();
+    expect(dependencies.openStrictPlayerWindow).not.toHaveBeenCalled();
   });
 
   it('reuses an existing offscreen document', async () => {
@@ -201,6 +247,55 @@ describe('SimulcastRuntime', () => {
     expect(runtime.getStatus()).toEqual({ state: 'stopped' });
   });
 
+  it('stops an active session before starting a new one', async () => {
+    const { dependencies, runtime } = createRuntime({
+      getTabMediaStreamId: vi
+        .fn()
+        .mockResolvedValueOnce('stream-id-1')
+        .mockResolvedValueOnce('stream-id-2'),
+    });
+
+    await runtime.start(baseRequest);
+    const result = await runtime.start(baseRequest);
+
+    expect(result.state).toBe('capturing');
+    expect(dependencies.sendRuntimeMessage).toHaveBeenNthCalledWith(2, {
+      type: 'simulcast:offscreenStop',
+      tabId: 42,
+    });
+    expect(dependencies.sendRuntimeMessage).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        type: 'simulcast:offscreenStart',
+        session: expect.objectContaining({
+          streamId: 'stream-id-2',
+        }),
+      })
+    );
+    expect(dependencies.closeOffscreenDocument).toHaveBeenCalledTimes(1);
+    expect(dependencies.removeAstAuthRule).toHaveBeenCalledTimes(1);
+    expect(dependencies.installAstAuthRule).toHaveBeenCalledTimes(2);
+  });
+
+  it('cleans up a dangling offscreen capture before starting', async () => {
+    const { dependencies, runtime } = createRuntime({
+      hasOffscreenDocument: vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(false),
+    });
+
+    await runtime.start(baseRequest);
+
+    expect(dependencies.sendRuntimeMessage).toHaveBeenNthCalledWith(1, {
+      type: 'simulcast:offscreenStop',
+      tabId: 42,
+    });
+    expect(dependencies.closeOffscreenDocument).toHaveBeenCalledTimes(1);
+    expect(dependencies.removeAstAuthRule).toHaveBeenCalledTimes(1);
+    expect(dependencies.sendRuntimeMessage).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        type: 'simulcast:offscreenStart',
+      })
+    );
+  });
+
   it('updates playback volumes in the active offscreen session', async () => {
     const { dependencies, runtime } = createRuntime();
 
@@ -225,11 +320,13 @@ describe('SimulcastRuntime', () => {
   it('removes AST auth rule when startup fails after installing headers', async () => {
     const { dependencies, runtime } = createRuntime({
       getTabMediaStreamId: vi.fn().mockRejectedValue(new Error('tab capture denied')),
+      openStrictPlayerWindow: vi.fn().mockResolvedValue(99),
     });
 
     await expect(runtime.start(baseRequest)).rejects.toThrow('tab capture denied');
 
     expect(dependencies.installAstAuthRule).toHaveBeenCalledTimes(1);
+    expect(dependencies.openStrictPlayerWindow).not.toHaveBeenCalled();
     expect(dependencies.removeAstAuthRule).toHaveBeenCalledTimes(1);
     expect(runtime.getStatus()).toEqual({ state: 'stopped' });
   });

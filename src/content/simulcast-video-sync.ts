@@ -2,6 +2,7 @@ import {
   normalizeSimulcastVideoSyncMode,
   type SimulcastVideoSyncMode,
 } from '@/simulcast/video-sync-mode';
+import { isRuntimeContextAvailable } from '@/core/chrome-message';
 
 /**
  * 同声传译音画同步：把页面主视频延迟 N 秒，使其与滞后的译音对齐。
@@ -44,6 +45,15 @@ export interface DynamicVideoSyncResult extends VideoSyncResult {
   diffSec?: number;
   playbackRate?: number;
   durationMs?: number;
+}
+
+export interface VideoViewportRect {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  viewportWidth: number;
+  viewportHeight: number;
 }
 
 interface SyncState {
@@ -203,6 +213,117 @@ export function findMainVideo(): HTMLVideoElement | null {
 /** 统计页面 video 数量（诊断用）。 */
 export function countVideos(): number {
   return document.querySelectorAll('video').length;
+}
+
+export function getMainVideoViewportRect(): VideoViewportRect | null {
+  const video = findMainVideo();
+  if (!video) {
+    return null;
+  }
+
+  const viewportWidth = Math.max(1, window.innerWidth || document.documentElement.clientWidth || 0);
+  const viewportHeight = Math.max(1, window.innerHeight || document.documentElement.clientHeight || 0);
+  const rect = getRenderedVideoContentRect(video);
+  const left = Math.max(0, Math.min(viewportWidth, rect.left));
+  const top = Math.max(0, Math.min(viewportHeight, rect.top));
+  const right = Math.max(left, Math.min(viewportWidth, rect.right));
+  const bottom = Math.max(top, Math.min(viewportHeight, rect.bottom));
+  const width = right - left;
+  const height = bottom - top;
+
+  if (width <= 1 || height <= 1) {
+    return null;
+  }
+
+  return {
+    left,
+    top,
+    width,
+    height,
+    viewportWidth,
+    viewportHeight,
+  };
+}
+
+function getRenderedVideoContentRect(video: HTMLVideoElement): DOMRectReadOnly {
+  const rect = video.getBoundingClientRect();
+  const intrinsicWidth = video.videoWidth;
+  const intrinsicHeight = video.videoHeight;
+  if (
+    rect.width <= 1 ||
+    rect.height <= 1 ||
+    intrinsicWidth <= 1 ||
+    intrinsicHeight <= 1
+  ) {
+    return rect;
+  }
+
+  const style = window.getComputedStyle(video);
+  const objectFit = style.objectFit || 'fill';
+  if (objectFit !== 'contain' && objectFit !== 'scale-down') {
+    return rect;
+  }
+
+  const containScale = Math.min(rect.width / intrinsicWidth, rect.height / intrinsicHeight);
+  const scale =
+    objectFit === 'scale-down'
+      ? Math.min(1, containScale)
+      : containScale;
+  const width = intrinsicWidth * scale;
+  const height = intrinsicHeight * scale;
+  if (width <= 1 || height <= 1) {
+    return rect;
+  }
+  if (
+    Math.abs(width - rect.width) < 1 &&
+    Math.abs(height - rect.height) < 1
+  ) {
+    return rect;
+  }
+
+  const [positionX = '50%', positionY = '50%'] = style.objectPosition
+    .trim()
+    .split(/\s+/);
+  const left = rect.left + resolveObjectPositionOffset(rect.width, width, positionX, 'x');
+  const top = rect.top + resolveObjectPositionOffset(rect.height, height, positionY, 'y');
+  return new DOMRectReadOnly(left, top, width, height);
+}
+
+function resolveObjectPositionOffset(
+  boxSize: number,
+  contentSize: number,
+  token: string,
+  axis: 'x' | 'y'
+): number {
+  const freeSpace = boxSize - contentSize;
+  const normalized = token.toLowerCase();
+  if (normalized.endsWith('%')) {
+    const percent = Number(normalized.slice(0, -1));
+    if (Number.isFinite(percent)) {
+      return freeSpace * (percent / 100);
+    }
+  }
+  if (normalized.endsWith('px')) {
+    const px = Number(normalized.slice(0, -2));
+    if (Number.isFinite(px)) {
+      return px;
+    }
+  }
+  if (
+    normalized === 'left' ||
+    normalized === 'top' ||
+    (axis === 'x' && normalized === 'start')
+  ) {
+    return 0;
+  }
+  if (
+    normalized === 'right' ||
+    normalized === 'bottom' ||
+    (axis === 'x' && normalized === 'end')
+  ) {
+    return freeSpace;
+  }
+  return freeSpace / 2;
 }
 
 function clampDynamicDelaySec(delaySec: number): number {
@@ -598,9 +719,22 @@ export function initSimulcastVideoSyncListener(): void {
   initVideoPlayingNotifier();
   initVideoLifecycleNotifier();
   initVideoScrubReporter();
+  if (!isRuntimeContextAvailable()) {
+    return;
+  }
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message?.type === 'simulcast:queryVideoPlaying') {
       sendResponse({ status: 'ok', playing: isMainVideoPlaying() });
+      return true;
+    }
+    if (message?.type === 'simulcast:getVideoViewportRect') {
+      const rect = getMainVideoViewportRect();
+      sendResponse({
+        status: 'ok',
+        videoFound: rect !== null,
+        videoCount: countVideos(),
+        rect,
+      });
       return true;
     }
     if (message?.type === 'simulcast:dynamicVideoSync') {

@@ -77,7 +77,8 @@ export function isExtensionContextInvalidatedError(error: unknown): boolean {
   return (
     message.includes('extension context invalidated') ||
     message.includes('could not establish connection') ||
-    message.includes('receiving end does not exist')
+    message.includes('receiving end does not exist') ||
+    message.includes('message channel closed before a response was received')
   );
 }
 
@@ -187,6 +188,11 @@ class ChromeMessageAdapter {
    * @returns 取消监听的函数
    */
   onMessage<T = any>(messageType: ChromeMessageType, callback: MessageCallback<T>): () => void {
+    if (!isRuntimeContextAvailable()) {
+      logMessageFailure('message', messageType, new Error('Extension context invalidated.'));
+      return () => undefined;
+    }
+
     const listener = (
       message: ChromeMessageRequest<T>,
       sender: chrome.runtime.MessageSender,

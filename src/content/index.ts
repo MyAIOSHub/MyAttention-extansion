@@ -665,6 +665,11 @@ function scheduleConversationSave(
  * 初始化设置监听
  */
 function initSettingsListener(): void {
+  if (!isRuntimeContextAvailable()) {
+    handleRuntimeContextInvalidated('设置监听初始化', new Error('Extension context invalidated.'));
+    return;
+  }
+
   // 监听来自后台脚本的消息
   try {
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -803,6 +808,11 @@ function initEventBusListeners(): void {
  * 初始化运行态健康监听（供 popup 诊断）
  */
 function initRuntimeHealthListener(): void {
+  if (!isRuntimeContextAvailable()) {
+    handleRuntimeContextInvalidated('运行态监听初始化', new Error('Extension context invalidated.'));
+    return;
+  }
+
   try {
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (message.type !== 'content:healthPing') {
@@ -1028,6 +1038,11 @@ function initPageTranslationListener(): void {
     return;
   }
   hasInitializedPageTranslationListener = true;
+
+  if (!isRuntimeContextAvailable()) {
+    handleRuntimeContextInvalidated('页面翻译监听初始化', new Error('Extension context invalidated.'));
+    return;
+  }
 
   try {
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {

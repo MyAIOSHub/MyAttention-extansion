@@ -165,7 +165,7 @@ export async function loadSettingsFromStorage(): Promise<void> {
     }
   } catch (error) {
     if (isExtensionContextInvalidatedError(error)) {
-      Logger.warn('[Common] 加载设置失败：扩展上下文已失效，使用默认设置');
+      Logger.debug('[Common] 加载设置失败：扩展上下文已失效，使用默认设置');
       return;
     }
     Logger.error('[Common] 加载设置失败:', error);
@@ -458,7 +458,7 @@ export function loadFontAwesome(): void {
     Logger.debug('[Common] Font Awesome 已加载');
   } catch (error) {
     if (isExtensionContextInvalidatedError(error)) {
-      Logger.warn('[Common] 跳过 Font Awesome 加载：扩展上下文已失效');
+      Logger.debug('[Common] 跳过 Font Awesome 加载：扩展上下文已失效');
       return;
     }
     Logger.error('[Common] Font Awesome 加载失败:', error);

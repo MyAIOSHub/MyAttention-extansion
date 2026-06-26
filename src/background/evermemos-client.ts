@@ -83,6 +83,39 @@ export class EverMemOSClientError extends Error {
   }
 }
 
+export function isEverMemOSClientError(error: unknown): error is EverMemOSClientError {
+  return (
+    error instanceof EverMemOSClientError ||
+    (typeof error === 'object' &&
+      error !== null &&
+      (error as { name?: unknown }).name === 'EverMemOSClientError')
+  );
+}
+
+export function isEverMemOSUnavailableError(error: unknown): boolean {
+  if (!isEverMemOSClientError(error)) {
+    return false;
+  }
+
+  const status = (error as { status?: unknown }).status;
+  if (typeof status === 'number') {
+    return false;
+  }
+
+  const code = (error as { code?: unknown }).code;
+  if (code === 'network' || code === 'timeout') {
+    return true;
+  }
+
+  const message = normalizeErrorMessage(error).toLowerCase();
+  return (
+    message.includes('failed to fetch') ||
+    message.includes('load failed') ||
+    message.includes('networkerror') ||
+    message.includes('request timeout')
+  );
+}
+
 
 /**
  * Convert SaySo Conversation to EverMemOS import format
@@ -158,7 +191,7 @@ export class EverMemOSClient {
   /**
    * Check connection to EverMemOS server
    */
-  async health(): Promise<{ connected: boolean; version?: string }> {
+  async health(): Promise<{ connected: boolean; version?: string; lastError?: string }> {
     try {
       const response = await this.request<{ status: string; version?: string }>('/health', {
         method: 'GET',
@@ -166,7 +199,7 @@ export class EverMemOSClient {
       });
       return { connected: true, version: response.version };
     } catch (error) {
-      return { connected: false };
+      return { connected: false, lastError: normalizeErrorMessage(error) };
     }
   }
 
@@ -288,6 +321,7 @@ export class EverMemOSClient {
         connected: health.connected,
         version: health.version,
         baseUrl: this.baseUrl,
+        lastError: health.lastError,
       };
     } catch (error) {
       return {
@@ -299,25 +333,38 @@ export class EverMemOSClient {
   }
 
   async getBrowserSyncStatus(): Promise<BrowserSyncStatus> {
-    const response = await this.request<{
-      status: string;
-      result?: { status?: BrowserSyncStatus };
-    }>('/api/v1/browser-sync/status', {
-      method: 'GET',
-      timeoutMs: 8000,
-    });
+    try {
+      const response = await this.request<{
+        status: string;
+        result?: { status?: BrowserSyncStatus };
+      }>('/api/v1/browser-sync/status', {
+        method: 'GET',
+        timeoutMs: 8000,
+      });
 
-    return (
-      response?.result?.status || {
+      return (
+        response?.result?.status || {
+          running: false,
+          pending_conversations: 0,
+          pending_snippets: 0,
+          in_progress_conversations: 0,
+          in_progress_snippets: 0,
+          imported_conversations: 0,
+          imported_snippets: 0,
+        }
+      );
+    } catch (error) {
+      return {
         running: false,
+        last_error: normalizeErrorMessage(error),
         pending_conversations: 0,
         pending_snippets: 0,
         in_progress_conversations: 0,
         in_progress_snippets: 0,
         imported_conversations: 0,
         imported_snippets: 0,
-      }
-    );
+      };
+    }
   }
 
   /**
@@ -372,11 +419,11 @@ export class EverMemOSClient {
       }
 
       if (error instanceof FetchTimeoutError) {
-        throw new EverMemOSClientError('Request timeout');
+        throw new EverMemOSClientError('Request timeout', { code: 'timeout' });
       }
 
       const message = normalizeErrorMessage(error, { includeDetail: true });
-      throw new EverMemOSClientError(message || 'EverMemOS request failed');
+      throw new EverMemOSClientError(message || 'EverMemOS request failed', { code: 'network' });
     }
   }
 }

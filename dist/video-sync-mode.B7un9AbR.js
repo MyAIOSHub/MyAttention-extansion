@@ -1,0 +1,1 @@
+const _="strict-delayed-player",e="sayso:simulcast:strict-player:",r=5,s=1,S=12;function a(t){const n=typeof t=="number"?t:Number(t);return Number.isFinite(n)?Math.min(12,Math.max(1,n)):5}function i(t){return t==="strict-delayed-player"||t==="subtitles-only"||t==="fallback-page-video"?t:_}function c(t){return"".concat(e).concat(t)}export{r as D,S as M,a,s as b,c as g,i as n};

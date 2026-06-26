@@ -41,4 +41,41 @@ describe('content common settings loading', () => {
       },
     });
   });
+
+  it('does not log an error when the settings response channel closes early', async () => {
+    vi.stubGlobal('chrome', {
+      runtime: {
+        id: 'test-extension-id',
+        sendMessage: vi.fn((_message: unknown, callback: (response: unknown) => void) => {
+          callback(undefined);
+        }),
+      },
+    });
+
+    Object.defineProperty(chrome.runtime, 'lastError', {
+      configurable: true,
+      get() {
+        return {
+          message:
+            'A listener indicated an asynchronous response by returning true, but the message channel closed before a response was received',
+        };
+      },
+    });
+
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const { getCurrentSettings, loadSettingsFromStorage } = await import('@/content/common');
+
+    await loadSettingsFromStorage();
+
+    expect(errorSpy).not.toHaveBeenCalled();
+    expect(getCurrentSettings()).toMatchObject({
+      autoSave: true,
+      webCapture: {
+        enabled: true,
+        highlightEnabled: true,
+        dwellEnabled: true,
+      },
+    });
+  });
 });

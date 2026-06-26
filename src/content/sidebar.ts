@@ -8,7 +8,10 @@ import {
   getSafeI18nMessage,
   getSafeRuntimeUrl,
 } from '@/content/common';
-import { isExtensionContextInvalidatedError } from '@/core/chrome-message';
+import {
+  isExtensionContextInvalidatedError,
+  isRuntimeContextAvailable,
+} from '@/core/chrome-message';
 import { SIDEBAR_ID } from '@/core/constants';
 
 /**
@@ -806,6 +809,11 @@ export function cleanupSidebar(): void {
  * 初始化侧边栏消息监听
  */
 export function initSidebarMessageListener(): void {
+  if (!isRuntimeContextAvailable()) {
+    Logger.debug('[Sidebar] 消息监听初始化失败：扩展上下文已失效');
+    return;
+  }
+
   try {
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (message.type === 'toggleSidebar') {
@@ -821,7 +829,7 @@ export function initSidebarMessageListener(): void {
     Logger.info('[Sidebar] 消息监听已初始化');
   } catch (error) {
     if (isExtensionContextInvalidatedError(error)) {
-      Logger.warn('[Sidebar] 消息监听初始化失败：扩展上下文已失效');
+      Logger.debug('[Sidebar] 消息监听初始化失败：扩展上下文已失效');
       return;
     }
     Logger.error('[Sidebar] 消息监听初始化失败:', error);

@@ -1,1 +1,0 @@
-System.register([],function(t,e){"use strict";return{execute:function(){t({g:function(t){return`${n}${t}`},n:function(t){return"strict-delayed-player"===t||"subtitles-only"===t?t:e}});const e="fallback-page-video",n="sayso:simulcast:strict-player:"}}});
