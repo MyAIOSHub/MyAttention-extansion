@@ -461,6 +461,8 @@ interface SimulcastUpdateMessage {
   videoStopped?: boolean;
   // 精准同步视频中继状态：unavailable 时本次会话回退页面视频对齐。
   strictVideo?: 'active' | 'unavailable';
+  // 精准同步主时钟有效缓冲（秒）：offscreen 自适应增长/收缩后的真实音画延迟，popup 显示真相源。
+  strictBufferSec?: number;
 }
 
 function getErrorMessage(error: unknown): string {
@@ -964,6 +966,16 @@ function handleSimulcastUpdate(
   if (message?.videoClock) {
     simulcastLatestVideoClock = message.videoClock;
     syncSubtitleToPlayhead();
+  }
+
+  // 精准延迟真相源：offscreen 主时钟有效缓冲（自适应增长/收缩）→ 显示真实音画延迟，
+  // 不再让 popup 的页面估算器（maybeAutoMeasureSyncDelay）展示与播放器不一致的猜测值。
+  if (
+    typeof message?.strictBufferSec === 'number' &&
+    simulcastRunning &&
+    effectiveSimulcastVideoSyncMode() === 'strict-delayed-player'
+  ) {
+    setSimulcastSyncStatus(`精准延迟 ${message.strictBufferSec.toFixed(1)}s（音画锁步）`);
   }
 
   if (
@@ -1800,6 +1812,9 @@ function maybeAutoMeasureSyncDelay(
   observedWallMs = Date.now()
 ): void {
   if (!simulcastRunning) return;
+  // 精准同步由 offscreen 主时钟掌控延迟（strictBufferSec 真相源）；页面估算器只服务回退/页面模式，
+  // 否则会用与播放器不一致的猜测值改写状态（曾出现 popup 1.0s vs 播放器 12.0s 的矛盾）。
+  if (effectiveSimulcastVideoSyncMode() === 'strict-delayed-player') return;
   if (source === 'subtitle' && simulcastSyncMeasured) return;
   if (source === 'audio' && simulcastSyncMeasuredFrom === 'audio') return;
   if (simulcastFirstSourceWall === 0) return; // 还没收到源字幕，无从估算

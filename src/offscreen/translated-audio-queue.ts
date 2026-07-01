@@ -51,8 +51,8 @@ export interface TranslatedAudioSourceTimeline {
   originWallMs: number;
   /** 固定缓冲(ms)。 */
   bufferMs: number;
-  /** 缓冲单向增长时回调（offscreen 内直接通知视频中继冻结/同步延迟）。参数为新的有效缓冲秒数。 */
-  onBufferGrow?: (effectiveBufferSec: number) => void;
+  /** 有效缓冲变化时回调（增长或收缩，offscreen 内直接通知视频中继同步延迟）。参数为新的有效缓冲秒数。 */
+  onBufferChange?: (effectiveBufferSec: number) => void;
 }
 
 function concatChunks(chunks: Uint8Array[]): Uint8Array {
@@ -110,6 +110,23 @@ function computeAdaptivePlaybackRateForDuration(queuedDurationMs: number, baseRa
   return Math.min(HARD_MAX_PLAYBACK_RATE, Math.max(MIN_PLAYBACK_RATE, baseRate + backlogBoost));
 }
 
+// 主时钟有界排水：译文常比原文长，固定 1x 会让队尾不断领先理想点 → 缓冲只能无限增长。
+// 积压时在基础倍速之上加速压缩译音（AudioBufferSource 无 preservesPitch → 轻微升调），
+// 封顶 1.25x 把升调控制在突发追赶时短暂可接受范围；稳态积压被排空后倍速回落基础值。
+const MASTER_DRAIN_MAX_RATE = 1.25;
+const MASTER_DRAIN_RATE_PER_SEC = 0.25;
+// 准点排程（无 shortfall）时，把之前积压撑大的缓冲按此步长逐段收回 base，relay 同步缩 delay。
+const MASTER_BUFFER_SHRINK_STEP_MS = 250;
+const MASTER_SHORTFALL_EPS_SEC = 0.001;
+
+/** 主时钟排水倍速 = clamp(base + 队尾积压秒数 × 0.25, base, max(base, 1.25))。 */
+function computeMasterDrainPlaybackRate(backlogSec: number, baseRate: number): number {
+  const base = clampBasePlaybackRate(baseRate);
+  const cap = Math.max(base, MASTER_DRAIN_MAX_RATE);
+  const boost = backlogSec > 0 ? backlogSec * MASTER_DRAIN_RATE_PER_SEC : 0;
+  return Math.min(cap, base + boost);
+}
+
 function setAudioPlaybackRate(audio: HTMLAudioElement, playbackRate: number): void {
   audio.playbackRate = playbackRate;
   const pitchPreservingAudio = audio as HTMLAudioElement & { preservesPitch?: boolean };
@@ -138,7 +155,7 @@ export class TranslatedAudioPlaybackQueue {
   private sourceTimelineOriginWallMs: number | null = null;
   private baseBufferMs = 0;
   private effectiveBufferMs = 0;
-  private onBufferGrow: ((effectiveBufferSec: number) => void) | null = null;
+  private onBufferChange: ((effectiveBufferSec: number) => void) | null = null;
 
   constructor(dependencies: Partial<TranslatedAudioPlaybackQueueDependencies> = {}) {
     this.dependencies = {
@@ -162,13 +179,13 @@ export class TranslatedAudioPlaybackQueue {
       this.sourceTimelineOriginWallMs = null;
       this.baseBufferMs = 0;
       this.effectiveBufferMs = 0;
-      this.onBufferGrow = null;
+      this.onBufferChange = null;
       return;
     }
     this.sourceTimelineOriginWallMs = timeline.originWallMs;
     this.baseBufferMs = Math.max(0, timeline.bufferMs);
     this.effectiveBufferMs = this.baseBufferMs;
-    this.onBufferGrow = timeline.onBufferGrow ?? null;
+    this.onBufferChange = timeline.onBufferChange ?? null;
     // 切换主时钟后旧的相对锚作废，避免残留偏移。
     this.timelineOriginContextTime = null;
   }
@@ -206,7 +223,7 @@ export class TranslatedAudioPlaybackQueue {
     this.sourceTimelineOriginWallMs = null;
     this.baseBufferMs = 0;
     this.effectiveBufferMs = 0;
-    this.onBufferGrow = null;
+    this.onBufferChange = null;
   }
 
   waitUntilIdle(): Promise<void> {
@@ -263,7 +280,7 @@ export class TranslatedAudioPlaybackQueue {
     this.sourceTimelineOriginWallMs = null;
     this.baseBufferMs = 0;
     this.effectiveBufferMs = 0;
-    this.onBufferGrow = null;
+    this.onBufferChange = null;
     this.lastScheduledEndContextTime = this.audioContext?.currentTime ?? 0;
     if (this.startTimerId !== null) {
       this.dependencies.clearTimeout(this.startTimerId);
@@ -338,28 +355,41 @@ export class TranslatedAudioPlaybackQueue {
     if (masterMode) {
       // 主时钟：源 PTS p → 墙钟 origin + p*1000，再加固定缓冲，换算到 ctx 时间。
       // 与视频帧 (capturedAtMs + buffer) 同一墙钟，故帧级锁步。
+      const prevScheduledEndContextTime = this.lastScheduledEndContextTime;
       const targetWallMs =
         this.sourceTimelineOriginWallMs! + sourceStartPts * 1000 + this.effectiveBufferMs;
       const rawTargetContextTime = this.wallTimeMsToContextTime(audioContext, targetWallMs);
       scheduledAtContextTime = Math.max(
         audioContext.currentTime,
         rawTargetContextTime,
-        this.lastScheduledEndContextTime
+        prevScheduledEndContextTime
       );
-      // 缺料/积压：被迫排到理想位置之后 → 缓冲单向增长，让视频帧同步冻结，保持锁步。
       const shortfallSec = scheduledAtContextTime - rawTargetContextTime;
-      if (shortfallSec > 0) {
+      if (shortfallSec > MASTER_SHORTFALL_EPS_SEC) {
+        // 缺料/积压：被迫排到理想位置之后 → 缓冲增长，让视频帧同步推后，保持锁步。
         const grownMs = Math.min(
           MAX_STRICT_BUFFER_SEC * 1000,
           this.effectiveBufferMs + shortfallSec * 1000
         );
         if (grownMs > this.effectiveBufferMs) {
           this.effectiveBufferMs = grownMs;
-          this.onBufferGrow?.(this.effectiveBufferMs / 1000);
+          this.onBufferChange?.(this.effectiveBufferMs / 1000);
+        }
+      } else if (this.effectiveBufferMs > this.baseBufferMs) {
+        // 准点排程：积压已排空 → 把之前撑大的缓冲逐段收回 base，relay 同步缩 delay（不再永久滞留 12s）。
+        const shrunkMs = Math.max(
+          this.baseBufferMs,
+          this.effectiveBufferMs - MASTER_BUFFER_SHRINK_STEP_MS
+        );
+        if (shrunkMs < this.effectiveBufferMs) {
+          this.effectiveBufferMs = shrunkMs;
+          this.onBufferChange?.(this.effectiveBufferMs / 1000);
         }
       }
-      // 主时钟模式固定基础倍速：积压加速会让译音跑到画面前面，破坏锁步（改由缓冲增长吸收）。
-      playbackRate = clampBasePlaybackRate(this.basePlaybackRate);
+      // 有界排水：队尾领先理想点(积压)时在基础倍速之上加速压缩译音，让理想时间线追平队尾，
+      // 从源头止住缓冲增长；稳态无积压则回落基础倍速（升调仅突发追赶时短暂出现）。
+      const backlogSec = Math.max(0, prevScheduledEndContextTime - rawTargetContextTime);
+      playbackRate = computeMasterDrainPlaybackRate(backlogSec, this.basePlaybackRate);
     } else {
       if (this.timelineOriginContextTime === null) {
         this.timelineOriginContextTime = audioContext.currentTime - sourceStartPts;

@@ -982,6 +982,7 @@ const messageHandlersMap: Record<
       translatedAudio: params.translatedAudio,
       audio: params.audio, // 转写录音回放（停止时一次性下发）
       strictVideo: params.strictVideo, // 严格中继成败 → popup 决定是否回退页面对齐
+      strictBufferSec: params.strictBufferSec, // 主时钟有效缓冲 → popup 显示真实音画延迟
     });
     return { status: 'ok' };
   },

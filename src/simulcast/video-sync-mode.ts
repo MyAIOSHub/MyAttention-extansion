@@ -12,12 +12,13 @@ export const DEFAULT_SIMULCAST_VIDEO_SYNC_MODE: SimulcastVideoSyncMode =
 export const SIMULCAST_STRICT_PLAYER_CHANNEL_PREFIX =
   'sayso:simulcast:strict-player:';
 
-// 精准同步固定缓冲（秒）：视频帧与译音共用的主时钟缓冲，缺料时单向增长。
-export const DEFAULT_STRICT_BUFFER_SEC = 5;
+// 精准同步缓冲（秒）：视频帧与译音共用的主时钟缓冲。自适应起步——缺料时增长、排空后收缩，
+// 故默认起点压到 2s（贴近 AST+TTS 实际延迟）以缩短预热；不足会自动涨，富余会自动回落。
+export const DEFAULT_STRICT_BUFFER_SEC = 2;
 export const MIN_STRICT_BUFFER_SEC = 1;
 export const MAX_STRICT_BUFFER_SEC = 12;
 
-/** 归一精准同步缓冲秒数，clamp 到 [1,12]，非法回落默认 5。 */
+/** 归一精准同步缓冲秒数，clamp 到 [1,12]，非法回落默认 2。 */
 export function normalizeStrictBufferSec(value: unknown): number {
   const n = typeof value === 'number' ? value : Number(value);
   if (!Number.isFinite(n)) {

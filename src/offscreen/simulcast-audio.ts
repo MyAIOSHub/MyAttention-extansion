@@ -748,15 +748,29 @@ async function startCapture(message: SimulcastOffscreenStartMessage): Promise<{
   activeVideoRelay = videoRelay ?? null;
   translatedAudioQueue.setAudioContext(audioContext);
   translatedAudioQueue.setBasePlaybackRate(session.translatedMaxPlaybackRate);
-  // 精准同步：把译音锚到与视频帧同一条「源墙钟 + 固定缓冲」主时钟；缺料增长时同步冻结视频帧。
+  // 精准同步：把译音锚到与视频帧同一条「源墙钟 + 固定缓冲」主时钟；缺料增长/排空收缩时同步推后/拉回视频帧。
   if (activeVideoRelay) {
     const bufferSec = normalizeStrictBufferSec(session.strictPlayerTargetDelaySec);
     const relay = activeVideoRelay;
+    const tabId = session.tabId;
+    // 把有效缓冲（真实音画延迟）回传 popup 作唯一真相源，避免页面估算器展示不一致的猜测值。
+    const reportBufferSec = (effectiveSec: number): void => {
+      chrome.runtime.sendMessage({
+        type: 'simulcast:update',
+        target: 'background',
+        tabId,
+        strictBufferSec: effectiveSec,
+      });
+    };
     translatedAudioQueue.setSourceTimeline({
       originWallMs: captureStartWallMs ?? performance.now(),
       bufferMs: bufferSec * 1000,
-      onBufferGrow: (effectiveSec) => relay.updateDelaySec(effectiveSec),
+      onBufferChange: (effectiveSec) => {
+        relay.updateDelaySec(effectiveSec);
+        reportBufferSec(effectiveSec);
+      },
     });
+    reportBufferSec(bufferSec);
   }
 
   return {

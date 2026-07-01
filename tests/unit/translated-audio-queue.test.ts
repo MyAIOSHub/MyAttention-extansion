@@ -26,11 +26,11 @@ class FakeGainNode {
   readonly disconnect = vi.fn();
 }
 
-function makeAudioContextQueue() {
+function makeAudioContextQueue(durations: number[] = [0.4, 0.4, 0.7, 0.7, 0.7]) {
   const sources: FakeBufferSource[] = [];
   const timers = new Map<number, { callback: () => void; delayMs: number }>();
   let nextTimerId = 1;
-  const decodedDurations = [0.4, 0.4, 0.7, 0.7, 0.7];
+  const decodedDurations = [...durations];
   const context = {
     currentTime: 10,
     destination: {},
@@ -128,10 +128,10 @@ describe('TranslatedAudioPlaybackQueue master-clock mode', () => {
     expect(sources[0].start).toHaveBeenCalledWith(16);
   });
 
-  it('grows the buffer (one-way) and notifies the relay when a segment lands late', async () => {
+  it('grows the buffer and notifies the relay when a segment lands late', async () => {
     const { queue, sources } = makeAudioContextQueue();
     const grows: number[] = [];
-    queue.setSourceTimeline({ originWallMs: 5000, bufferMs: 0, onBufferGrow: (s) => grows.push(s) });
+    queue.setSourceTimeline({ originWallMs: 5000, bufferMs: 0, onBufferChange: (s) => grows.push(s) });
     // 两段都锚到同一源时间(pts=0)；第一段占住时间线，第二段被迫排到其后 → shortfall → 缓冲增长。
     queue.enqueue({ segmentId: 1, chunks: [new Uint8Array([1])], getVolume: () => 1, delayMs: 0, sourceStartPts: 0, sourceEndPts: 0 });
     queue.enqueue({ segmentId: 2, chunks: [new Uint8Array([2])], getVolume: () => 1, delayMs: 0, sourceStartPts: 0, sourceEndPts: 0 });
@@ -143,20 +143,51 @@ describe('TranslatedAudioPlaybackQueue master-clock mode', () => {
     expect(grows[0]).toBeCloseTo(0.4, 5);
   });
 
-  it('does not boost playback rate in master mode even with backlog', async () => {
+  it('boosts playback rate (bounded) in master mode when backlog accumulates', async () => {
     const { queue, sources } = makeAudioContextQueue();
     queue.setSourceTimeline({ originWallMs: 5000, bufferMs: 0 });
     for (let id = 1; id <= 3; id += 1) {
       queue.enqueue({ segmentId: id, chunks: [new Uint8Array([id])], getVolume: () => 1, delayMs: 0, sourceStartPts: 0, sourceEndPts: 0 });
     }
     await queue.waitUntilIdle();
-    expect(sources.every((s) => s.playbackRate.value === 1)).toBe(true);
+    // 首段无积压 → 基础倍速；后续队尾领先理想点 → 排水加速，但封顶 1.25x（保音高在可接受范围）。
+    expect(sources[0].playbackRate.value).toBe(1);
+    expect(sources[2].playbackRate.value).toBeGreaterThan(1);
+    expect(sources.every((s) => s.playbackRate.value <= 1.25 + 1e-9)).toBe(true);
+  });
+
+  it('caps the drain playback rate at 1.25x under heavy backlog', async () => {
+    // 每段译音 2s，同一源时刻 → 队尾迅速领先 → backlog>1s → 倍速本应 >1.25，被封顶。
+    const { queue, sources } = makeAudioContextQueue([2, 2, 2]);
+    queue.setSourceTimeline({ originWallMs: 5000, bufferMs: 0 });
+    for (let id = 1; id <= 3; id += 1) {
+      queue.enqueue({ segmentId: id, chunks: [new Uint8Array([id])], getVolume: () => 1, delayMs: 0, sourceStartPts: 0, sourceEndPts: 0 });
+    }
+    await queue.waitUntilIdle();
+    expect(sources[2].playbackRate.value).toBeCloseTo(1.25, 5);
+  });
+
+  it('shrinks the grown buffer back toward base once segments schedule on time', async () => {
+    // 全段 0.4s。base=2s。先用一段几乎贴脸的 pts 制造 shortfall → 缓冲增长；
+    // 再喂一段 pts 大幅前进的准点段 → 队尾落后理想点 → 缓冲收缩，relay 同步缩。
+    const { queue } = makeAudioContextQueue([0.4, 0.4, 0.4]);
+    const changes: number[] = [];
+    queue.setSourceTimeline({ originWallMs: 5000, bufferMs: 2000, onBufferChange: (s) => changes.push(s) });
+    queue.enqueue({ segmentId: 1, chunks: [new Uint8Array([1])], getVolume: () => 1, delayMs: 0, sourceStartPts: 0, sourceEndPts: 0.4 });
+    queue.enqueue({ segmentId: 2, chunks: [new Uint8Array([2])], getVolume: () => 1, delayMs: 0, sourceStartPts: 0.1, sourceEndPts: 0.5 });
+    queue.enqueue({ segmentId: 3, chunks: [new Uint8Array([3])], getVolume: () => 1, delayMs: 0, sourceStartPts: 1, sourceEndPts: 1.4 });
+    await queue.waitUntilIdle();
+    // 第2段晚到 → 增长(>2.0)；第3段准点 → 收缩(< 上一次增长值)。
+    expect(changes.length).toBeGreaterThanOrEqual(2);
+    expect(changes[0]).toBeGreaterThan(2);
+    expect(changes[changes.length - 1]).toBeLessThan(changes[0]);
+    expect(changes[changes.length - 1]).toBeGreaterThanOrEqual(2);
   });
 
   it('falls back to sequential (no master target, no grow) when a segment lacks sourceStartPts', async () => {
     const { queue, sources } = makeAudioContextQueue();
     const grows: number[] = [];
-    queue.setSourceTimeline({ originWallMs: 5000, bufferMs: 2000, onBufferGrow: (s) => grows.push(s) });
+    queue.setSourceTimeline({ originWallMs: 5000, bufferMs: 2000, onBufferChange: (s) => grows.push(s) });
     queue.enqueue({ segmentId: 1, chunks: [new Uint8Array([1])], getVolume: () => 1, delayMs: 0 });
     await queue.waitUntilIdle();
     expect(sources).toHaveLength(1);
